@@ -3,6 +3,8 @@ const Service = require('../models/Service');
 const calendar = require('../config/googleCalendar');
 const socket = require('../socket/socket');
 
+const ID_CALENDARIO = process.env.ID_CALENDARIO;
+
 // ID de tu calendario personal donde manejas tu agenda
 exports.crearCita = async (req, res) => {
   try {
