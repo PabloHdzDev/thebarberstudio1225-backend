@@ -212,3 +212,28 @@ exports.obtenerMisCitas = async (req, res) => {
     res.status(500).json({ mensaje: 'Error al obtener tus citas' });
   }
 };
+
+exports.consultarDisponibilidad = async (req, res) => {
+  try {
+    const { fecha } = req.params; // Recibimos la fecha (ej. 2024-05-20)
+    
+    // Ajustamos la búsqueda desde las 00:00 hasta las 23:59 hora de México
+    const timeMin = new Date(`${fecha}T00:00:00-06:00`).toISOString();
+    const timeMax = new Date(`${fecha}T23:59:59-06:00`).toISOString();
+
+    const consulta = await calendar.freebusy.query({
+      resource: {
+        timeMin,
+        timeMax,
+        timeZone: 'America/Mexico_City',
+        items: [{ id: process.env.ID_CALENDARIO }],
+      },
+    });
+
+    // Devolvemos el arreglo de bloques ocupados [{start, end}, ...]
+    res.json(consulta.data.calendars[process.env.ID_CALENDARIO].busy);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error al consultar Google Calendar' });
+  }
+};
