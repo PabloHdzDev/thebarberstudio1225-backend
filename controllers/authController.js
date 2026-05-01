@@ -68,3 +68,14 @@ const { identificador, password } = req.body;
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
+
+exports.obtenerUsuarios = async (req, res) => {
+  try {
+    // Buscamos todos los usuarios, pero EXCLUIMOS la contraseña por seguridad
+    const usuarios = await User.find().select('-password');
+    res.json(usuarios);
+  } catch (error) {
+    console.error("Error al obtener usuarios:", error);
+    res.status(500).json({ mensaje: 'Error al obtener la lista de clientes' });
+  }
+};

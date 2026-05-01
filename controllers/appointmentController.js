@@ -5,16 +5,16 @@ const socket = require('../socket/socket');
 
 const ID_CALENDARIO = process.env.ID_CALENDARIO;
 
-// ID de tu calendario personal donde manejas tu agenda
 exports.crearCita = async (req, res) => {
   try {
-    const { servicio, fechaHora, notas } = req.body;
+    const { servicio, fechaHora, notas, cliente, nombreInvitado } = req.body;
     const citaFecha = new Date(fechaHora);
     const ahora = new Date();
 
-    // --- RESTRICCIÓN DE 4 HORAS PARA NUEVAS CITAS ---
+    // --- RESTRICCIÓN DE TIEMPO ---
+    // El barbero puede agendar citas en cualquier momento. El cliente tiene restricción de 4 horas.
     const diferenciaCreacion = (citaFecha - ahora) / (1000 * 60 * 60);
-    if (diferenciaCreacion < 4) {
+    if (req.user.rol !== 'barbero' && diferenciaCreacion < 4) {
       return res.status(400).json({ 
         mensaje: 'Las citas deben agendarse con al menos 4 horas de anticipación.' 
       });
@@ -25,6 +25,24 @@ exports.crearCita = async (req, res) => {
     
     const duracion = servicioBD.duracionMinutos || 30;
     const finCita = new Date(citaFecha.getTime() + duracion * 60000);
+
+    // --- LÓGICA DE IDENTIFICACIÓN ---
+    let clienteId = req.user._id;
+    let nombreParaGoogle = req.user.nombre;
+
+    if (req.user.rol === 'barbero') {
+      if (cliente) {
+        // Barbero agendando a cliente registrado (buscamos su nombre para Google)
+        const User = require('../models/User'); // Import local para evitar círculos si es necesario
+        const clienteRegistrado = await User.findById(cliente);
+        clienteId = cliente;
+        nombreParaGoogle = clienteRegistrado ? clienteRegistrado.nombre : 'Cliente';
+      } else {
+        // Barbero agendando a un invitado
+        clienteId = null;
+        nombreParaGoogle = `${nombreInvitado}`;
+      }
+    }
 
     // Verificar disponibilidad en Google
     const consulta = await calendar.freebusy.query({
@@ -37,29 +55,32 @@ exports.crearCita = async (req, res) => {
     });
 
     if (consulta.data.calendars[ID_CALENDARIO].busy.length > 0) {
-      return res.status(400).json({ mensaje: 'Este horario ya está ocupado.' });
+      return res.status(400).json({ mensaje: 'Este horario ya está ocupado en el calendario.' });
     }
 
+    // Insertar en Google Calendar
     const googleRes = await calendar.events.insert({
       calendarId: ID_CALENDARIO,
       resource: {
-        summary: `💈 Corte: ${req.user.nombre}`,
+        summary: `💈 Corte: ${nombreParaGoogle}`,
         description: `Servicio: ${servicioBD.nombre}\nNotas: ${notas}`,
         start: { dateTime: citaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finCita.toISOString(), timeZone: 'America/Mexico_City' },
       }
     });
 
+    // Guardar en MongoDB
     const nuevaCita = await Appointment.create({
       servicio,
-      cliente: req.user._id,
+      cliente: clienteId,
+      nombreInvitado: clienteId ? null : nombreInvitado,
       fechaHora,
       notas,
       googleEventId: googleRes.data.id
     });
 
     const citaPoblada = await Appointment.findById(nuevaCita._id)
-      .populate('servicio', 'nombre')
+      .populate('servicio', 'nombre precio')
       .populate('cliente', 'nombre whatsapp');
 
     socket.getIo().emit('notificar_cita', citaPoblada);
@@ -76,10 +97,10 @@ exports.actualizarCita = async (req, res) => {
     const { id } = req.params;
     const { fechaHora, notas } = req.body;
 
-    const citaPrevia = await Appointment.findById(id).populate('servicio');
+    const citaPrevia = await Appointment.findById(id).populate('servicio cliente');
     if (!citaPrevia) return res.status(404).json({ mensaje: 'Cita no encontrada' });
 
-    // Restricción de 24 horas para cambios (Excepción para barbero)
+    // El barbero siempre puede editar. El cliente solo con 24h de anticipación.
     const ahora = new Date();
     const tiempoCitaOriginal = new Date(citaPrevia.fechaHora);
     const diferenciaHoras = (tiempoCitaOriginal - ahora) / (1000 * 60 * 60);
@@ -94,13 +115,14 @@ exports.actualizarCita = async (req, res) => {
     const duracion = citaPrevia.servicio.duracionMinutos || 30;
     const finNuevaCita = new Date(nuevaFecha.getTime() + duracion * 60000);
 
-    // Borrar y Re-verificar disponibilidad
+    // Borrar evento anterior de Google
     if (citaPrevia.googleEventId) {
       try {
         await calendar.events.delete({ calendarId: ID_CALENDARIO, eventId: citaPrevia.googleEventId });
-      } catch (e) {}
+      } catch (e) { console.log("Evento de Google no encontrado para borrar"); }
     }
 
+    // Verificar disponibilidad para la nueva fecha
     const consulta = await calendar.freebusy.query({
       resource: {
         timeMin: nuevaFecha.toISOString(),
@@ -111,13 +133,15 @@ exports.actualizarCita = async (req, res) => {
     });
 
     if (consulta.data.calendars[ID_CALENDARIO].busy.length > 0) {
-      return res.status(400).json({ mensaje: 'Horario ocupado.' });
+      return res.status(400).json({ mensaje: 'Ese nuevo horario está ocupado.' });
     }
+
+    const nombreParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.nombre : `${citaPrevia.nombreInvitado} (Walk-in)`;
 
     const googleRes = await calendar.events.insert({
       calendarId: ID_CALENDARIO,
       resource: {
-        summary: `💈 Corte: ${req.user.nombre} ${req.user.rol === 'barbero' ? '(Admin)' : ''}`,
+        summary: `💈 Corte: ${nombreParaGoogle} ${req.user.rol === 'barbero' ? '(Modificado)' : ''}`,
         description: `Servicio: ${citaPrevia.servicio.nombre}\nNotas: ${notas}`,
         start: { dateTime: nuevaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finNuevaCita.toISOString(), timeZone: 'America/Mexico_City' },
@@ -134,6 +158,7 @@ exports.actualizarCita = async (req, res) => {
     res.json({ mensaje: 'Cita actualizada correctamente', cita: citaActualizada });
 
   } catch (error) {
+    console.error(error);
     res.status(500).json({ mensaje: 'Error al actualizar.' });
   }
 };
@@ -155,7 +180,7 @@ exports.eliminarCita = async (req, res) => {
     if (cita.googleEventId) {
       try {
         await calendar.events.delete({ calendarId: ID_CALENDARIO, eventId: cita.googleEventId });
-      } catch (gErr) {}
+      } catch (gErr) { console.log("No se pudo borrar de Google"); }
     }
 
     await Appointment.findByIdAndDelete(req.params.id);
