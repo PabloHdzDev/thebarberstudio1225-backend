@@ -2,7 +2,8 @@ const Service = require('../models/Service');
 
 exports.crearServicio = async (req, res) => {
   try {
-    const { nombre, descripcion, precio, duracionMinutos, activo } = req.body;
+    // 👇 1. Extraemos los nuevos campos del req.body
+    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior } = req.body;
 
     // Si Multer procesó una imagen, estará en req.file
     const urlImagen = req.file ? req.file.path : '';
@@ -12,8 +13,11 @@ exports.crearServicio = async (req, res) => {
       descripcion,
       precio,
       duracionMinutos,
-      // Si activo viene en FormData, llega como string "true" o "false"
+      // Convertimos todo correctamente ya que FormData manda puros Strings
       activo: activo !== undefined ? (activo === 'true' || activo === true) : true, 
+      orden: orden ? parseInt(orden) : 0,
+      esOferta: esOferta === 'true' || esOferta === true,
+      precioAnterior: precioAnterior ? parseFloat(precioAnterior) : 0,
       imagen: urlImagen
     });
 
@@ -37,7 +41,7 @@ exports.obtenerServicios = async (req, res) => {
       filtro = {}; 
     }
 
-    const servicios = await Service.find(filtro);
+    const servicios = await Service.find(filtro).sort({ orden: 1 });
     res.status(200).json(servicios);
 
   } catch (error) {
@@ -67,14 +71,17 @@ exports.obtenerUnServicio = async (req, res) => {
 exports.actualizarServicio = async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, descripcion, precio, duracionMinutos, activo } = req.body;
+    
+    // 👇 2. También extraemos los nuevos campos aquí
+    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior } = req.body;
 
     let updateData = { nombre, descripcion, precio, duracionMinutos };
 
-    // Convertimos el string a booleano
-    if (activo !== undefined) {
-      updateData.activo = activo === 'true' || activo === true;
-    }
+    // Convertimos los datos asegurando que no sobreescribimos con "undefined" si no los enviaron
+    if (activo !== undefined) updateData.activo = activo === 'true' || activo === true;
+    if (orden !== undefined) updateData.orden = parseInt(orden);
+    if (esOferta !== undefined) updateData.esOferta = esOferta === 'true' || esOferta === true;
+    if (precioAnterior !== undefined) updateData.precioAnterior = parseFloat(precioAnterior);
 
     // Si el barbero subió una foto nueva, actualizamos el link
     if (req.file) {
