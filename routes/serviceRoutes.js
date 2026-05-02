@@ -3,7 +3,6 @@ const router = express.Router();
 const serviceController = require('../controllers/serviceController');
 const { protegerRuta } = require('../middleware/authMiddleware');
 
-// Si tienes un middleware de roles (como en productos), descomenta la siguiente línea:
 const { soloBarbero } = require('../middleware/roleMiddleware'); 
 
 const uploadCloud = require('../config/cloudinary');

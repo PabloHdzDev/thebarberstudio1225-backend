@@ -1,13 +1,15 @@
-// backend/models/Product.js
 const mongoose = require('mongoose');
 
-const ProductSchema = new mongoose.Schema({
+const productSchema = new mongoose.Schema({
   nombre: { type: String, required: true },
   descripcion: { type: String },
   precio: { type: Number, required: true },
   stock: { type: Number, default: 0 },
   imagen: { type: String },
-  activo: { type: Boolean, default: true }
-}, { timestamps: true });
+  activo: { type: Boolean, default: true },
+  orden: { type: Number, default: 0 },
+  esOferta: { type: Boolean, default: false },
+  precioAnterior: { type: Number }
+});
 
-module.exports = mongoose.model('Product', ProductSchema);
+module.exports = mongoose.model('Product', productSchema);
