@@ -2,6 +2,7 @@ const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
 const calendar = require('../config/googleCalendar');
 const socket = require('../socket/socket');
+const transporter = require('../config/mailer'); // 👈 Tu nuevo sistema de notificaciones
 
 const ID_CALENDARIO = process.env.ID_CALENDARIO;
 
@@ -12,7 +13,6 @@ exports.crearCita = async (req, res) => {
     const ahora = new Date();
 
     // --- RESTRICCIÓN DE TIEMPO ---
-    // El barbero puede agendar citas en cualquier momento. El cliente tiene restricción de 4 horas.
     const diferenciaCreacion = (citaFecha - ahora) / (1000 * 60 * 60);
     if (req.user.rol !== 'barbero' && diferenciaCreacion < 4) {
       return res.status(400).json({ 
@@ -29,21 +29,19 @@ exports.crearCita = async (req, res) => {
     // --- LÓGICA DE IDENTIFICACIÓN ---
     let clienteId = req.user._id;
     let nombreParaGoogle = req.user.nombre;
-    let telefonoParaGoogle = req.user.whatsapp || 'No registrado'; // 👈 Teléfono por defecto
+    let telefonoParaGoogle = req.user.whatsapp || 'No registrado'; 
 
     if (req.user.rol === 'barbero') {
       if (cliente) {
-        // Barbero agendando a cliente registrado (buscamos su nombre y teléfono para Google)
-        const User = require('../models/User'); // Import local para evitar círculos si es necesario
+        const User = require('../models/User'); 
         const clienteRegistrado = await User.findById(cliente);
         clienteId = cliente;
         nombreParaGoogle = clienteRegistrado ? clienteRegistrado.nombre : 'Cliente';
-        telefonoParaGoogle = clienteRegistrado ? clienteRegistrado.whatsapp : 'No registrado'; // 👈 Teléfono del cliente
+        telefonoParaGoogle = clienteRegistrado ? clienteRegistrado.whatsapp : 'No registrado'; 
       } else {
-        // Barbero agendando a un invitado
         clienteId = null;
         nombreParaGoogle = `${nombreInvitado} (Walk-in)`;
-        telefonoParaGoogle = 'Cliente de paso'; // 👈 Invitado sin teléfono
+        telefonoParaGoogle = 'Cliente de paso'; 
       }
     }
 
@@ -66,7 +64,6 @@ exports.crearCita = async (req, res) => {
       calendarId: ID_CALENDARIO,
       resource: {
         summary: `💈 Corte: ${nombreParaGoogle}`,
-        // 👇 Descripción enriquecida con el número de WhatsApp
         description: `📱 WhatsApp: ${telefonoParaGoogle}\n✂️ Servicio: ${servicioBD.nombre}\n📝 Notas: ${notas || 'Ninguna'}`,
         start: { dateTime: citaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finCita.toISOString(), timeZone: 'America/Mexico_City' },
@@ -82,6 +79,30 @@ exports.crearCita = async (req, res) => {
       notas,
       googleEventId: googleRes.data.id
     });
+
+    // --- ENVIAR NOTIFICACIÓN POR CORREO (AL BARBERO) ---
+    const fechaLegible = new Date(fechaHora).toLocaleString('es-MX', {
+      timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
+    });
+
+    const mailOptions = {
+      from: `"Barber Imperio Bot 💈" <${process.env.EMAIL_USER}>`,
+      to: process.env.EMAIL_USER,
+      subject: `✅ NUEVA CITA: ${nombreParaGoogle}`,
+      html: `
+        <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-w: 600px;">
+          <h2 style="color: #d4af37; margin-top: 0;">¡Tienes un nuevo turno agendado!</h2>
+          <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
+          <p><strong>Servicio:</strong> ${servicioBD.nombre} ($${servicioBD.precio})</p>
+          <p><strong>Fecha y Hora:</strong> ${fechaLegible}</p>
+          <p><strong>WhatsApp:</strong> ${telefonoParaGoogle}</p>
+          <p><strong>Notas:</strong> ${notas || 'Sin notas adicionales'}</p>
+          <hr style="border: 1px solid #eee; margin: 20px 0;" />
+          <p style="font-size: 11px; color: #888;">Mensaje automático del panel de Barber Imperio.</p>
+        </div>
+      `
+    };
+    transporter.sendMail(mailOptions).catch(err => console.error("Error enviando email:", err));
 
     const citaPoblada = await Appointment.findById(nuevaCita._id)
       .populate('servicio', 'nombre precio')
@@ -104,7 +125,6 @@ exports.actualizarCita = async (req, res) => {
     const citaPrevia = await Appointment.findById(id).populate('servicio cliente');
     if (!citaPrevia) return res.status(404).json({ mensaje: 'Cita no encontrada' });
 
-    // El barbero siempre puede editar. El cliente solo con 24h de anticipación.
     const ahora = new Date();
     const tiempoCitaOriginal = new Date(citaPrevia.fechaHora);
     const diferenciaHoras = (tiempoCitaOriginal - ahora) / (1000 * 60 * 60);
@@ -119,14 +139,12 @@ exports.actualizarCita = async (req, res) => {
     const duracion = citaPrevia.servicio.duracionMinutos || 30;
     const finNuevaCita = new Date(nuevaFecha.getTime() + duracion * 60000);
 
-    // Borrar evento anterior de Google
     if (citaPrevia.googleEventId) {
       try {
         await calendar.events.delete({ calendarId: ID_CALENDARIO, eventId: citaPrevia.googleEventId });
       } catch (e) { console.log("Evento de Google no encontrado para borrar"); }
     }
 
-    // Verificar disponibilidad para la nueva fecha
     const consulta = await calendar.freebusy.query({
       resource: {
         timeMin: nuevaFecha.toISOString(),
@@ -141,14 +159,12 @@ exports.actualizarCita = async (req, res) => {
     }
 
     const nombreParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.nombre : `${citaPrevia.nombreInvitado} (Walk-in)`;
-    // 👈 Sacamos el teléfono de la cita previa
     const telefonoParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.whatsapp : 'Cliente de paso';
 
     const googleRes = await calendar.events.insert({
       calendarId: ID_CALENDARIO,
       resource: {
         summary: `💈 Corte: ${nombreParaGoogle} ${req.user.rol === 'barbero' ? '(Modificado)' : ''}`,
-        // 👇 Descripción enriquecida para las reprogramaciones también
         description: `📱 WhatsApp: ${telefonoParaGoogle}\n✂️ Servicio: ${citaPrevia.servicio.nombre}\n📝 Notas: ${notas || 'Ninguna'}`,
         start: { dateTime: nuevaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finNuevaCita.toISOString(), timeZone: 'America/Mexico_City' },
@@ -161,6 +177,26 @@ exports.actualizarCita = async (req, res) => {
       { new: true }
     ).populate('servicio cliente');
 
+    // --- ENVIAR NOTIFICACIÓN DE REPROGRAMACIÓN (AL BARBERO) ---
+    const fechaAntiguaLegible = new Date(citaPrevia.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+    const fechaNuevaLegible = new Date(nuevaFecha).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const mailOptions = {
+      from: `"Barber Imperio Bot 💈" <${process.env.EMAIL_USER}>`,
+      to: process.env.EMAIL_USER,
+      subject: `🔄 REPROGRAMACIÓN: ${nombreParaGoogle}`,
+      html: `
+        <div style="font-family: sans-serif; border: 2px solid #2196F3; padding: 20px; border-radius: 10px; max-w: 600px;">
+          <h2 style="color: #2196F3; margin-top: 0;">Cita Reprogramada</h2>
+          <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
+          <p><strong>Día anterior:</strong> <strike>${fechaAntiguaLegible}</strike></p>
+          <p><strong>Nuevo Horario:</strong> <strong>${fechaNuevaLegible}</strong></p>
+          <p><strong>Notas actualizadas:</strong> ${notas || 'Sin notas'}</p>
+        </div>
+      `
+    };
+    transporter.sendMail(mailOptions).catch(err => console.log(err));
+
     socket.getIo().emit('notificar_cita', citaActualizada);
     res.json({ mensaje: 'Cita actualizada correctamente', cita: citaActualizada });
 
@@ -172,7 +208,7 @@ exports.actualizarCita = async (req, res) => {
 
 exports.eliminarCita = async (req, res) => {
   try {
-    const cita = await Appointment.findById(req.params.id);
+    const cita = await Appointment.findById(req.params.id).populate('servicio cliente');
     if (!cita) return res.status(404).json({ mensaje: 'Cita no encontrada' });
 
     const ahora = new Date();
@@ -189,6 +225,25 @@ exports.eliminarCita = async (req, res) => {
         await calendar.events.delete({ calendarId: ID_CALENDARIO, eventId: cita.googleEventId });
       } catch (gErr) { console.log("No se pudo borrar de Google"); }
     }
+
+    // --- ENVIAR NOTIFICACIÓN DE CANCELACIÓN (AL BARBERO) ---
+    const nombreParaGoogle = cita.cliente ? cita.cliente.nombre : `${cita.nombreInvitado} (Walk-in)`;
+    const fechaLegible = new Date(cita.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const mailOptions = {
+      from: `"Barber Imperio Bot 💈" <${process.env.EMAIL_USER}>`,
+      to: process.env.EMAIL_USER,
+      subject: `❌ CITA CANCELADA: ${nombreParaGoogle}`,
+      html: `
+        <div style="font-family: sans-serif; border: 2px solid #F44336; padding: 20px; border-radius: 10px; max-w: 600px;">
+          <h2 style="color: #F44336; margin-top: 0;">Un turno se ha liberado</h2>
+          <p>El cliente <strong>${nombreParaGoogle}</strong> acaba de cancelar su cita.</p>
+          <p><strong>Horario liberado:</strong> ${fechaLegible}</p>
+          <p><strong>Servicio:</strong> ${cita.servicio?.nombre || 'No especificado'}</p>
+        </div>
+      `
+    };
+    transporter.sendMail(mailOptions).catch(err => console.log(err));
 
     await Appointment.findByIdAndDelete(req.params.id);
     res.json({ mensaje: 'Cita eliminada correctamente' });
@@ -222,9 +277,8 @@ exports.obtenerMisCitas = async (req, res) => {
 
 exports.consultarDisponibilidad = async (req, res) => {
   try {
-    const { fecha } = req.params; // Recibimos la fecha (ej. 2024-05-20)
+    const { fecha } = req.params; 
     
-    // Ajustamos la búsqueda desde las 00:00 hasta las 23:59 hora de México
     const timeMin = new Date(`${fecha}T00:00:00-06:00`).toISOString();
     const timeMax = new Date(`${fecha}T23:59:59-06:00`).toISOString();
 
@@ -237,7 +291,6 @@ exports.consultarDisponibilidad = async (req, res) => {
       },
     });
 
-    // Devolvemos el arreglo de bloques ocupados [{start, end}, ...]
     res.json(consulta.data.calendars[process.env.ID_CALENDARIO].busy);
   } catch (error) {
     console.error(error);
