@@ -29,18 +29,21 @@ exports.crearCita = async (req, res) => {
     // --- LÓGICA DE IDENTIFICACIÓN ---
     let clienteId = req.user._id;
     let nombreParaGoogle = req.user.nombre;
+    let telefonoParaGoogle = req.user.whatsapp || 'No registrado'; // 👈 Teléfono por defecto
 
     if (req.user.rol === 'barbero') {
       if (cliente) {
-        // Barbero agendando a cliente registrado (buscamos su nombre para Google)
+        // Barbero agendando a cliente registrado (buscamos su nombre y teléfono para Google)
         const User = require('../models/User'); // Import local para evitar círculos si es necesario
         const clienteRegistrado = await User.findById(cliente);
         clienteId = cliente;
         nombreParaGoogle = clienteRegistrado ? clienteRegistrado.nombre : 'Cliente';
+        telefonoParaGoogle = clienteRegistrado ? clienteRegistrado.whatsapp : 'No registrado'; // 👈 Teléfono del cliente
       } else {
         // Barbero agendando a un invitado
         clienteId = null;
-        nombreParaGoogle = `${nombreInvitado}`;
+        nombreParaGoogle = `${nombreInvitado} (Walk-in)`;
+        telefonoParaGoogle = 'Cliente de paso'; // 👈 Invitado sin teléfono
       }
     }
 
@@ -63,7 +66,8 @@ exports.crearCita = async (req, res) => {
       calendarId: ID_CALENDARIO,
       resource: {
         summary: `💈 Corte: ${nombreParaGoogle}`,
-        description: `Servicio: ${servicioBD.nombre}\nNotas: ${notas}`,
+        // 👇 Descripción enriquecida con el número de WhatsApp
+        description: `📱 WhatsApp: ${telefonoParaGoogle}\n✂️ Servicio: ${servicioBD.nombre}\n📝 Notas: ${notas || 'Ninguna'}`,
         start: { dateTime: citaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finCita.toISOString(), timeZone: 'America/Mexico_City' },
       }
@@ -137,12 +141,15 @@ exports.actualizarCita = async (req, res) => {
     }
 
     const nombreParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.nombre : `${citaPrevia.nombreInvitado} (Walk-in)`;
+    // 👈 Sacamos el teléfono de la cita previa
+    const telefonoParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.whatsapp : 'Cliente de paso';
 
     const googleRes = await calendar.events.insert({
       calendarId: ID_CALENDARIO,
       resource: {
         summary: `💈 Corte: ${nombreParaGoogle} ${req.user.rol === 'barbero' ? '(Modificado)' : ''}`,
-        description: `Servicio: ${citaPrevia.servicio.nombre}\nNotas: ${notas}`,
+        // 👇 Descripción enriquecida para las reprogramaciones también
+        description: `📱 WhatsApp: ${telefonoParaGoogle}\n✂️ Servicio: ${citaPrevia.servicio.nombre}\n📝 Notas: ${notas || 'Ninguna'}`,
         start: { dateTime: nuevaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finNuevaCita.toISOString(), timeZone: 'America/Mexico_City' },
       }
