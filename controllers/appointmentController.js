@@ -40,7 +40,7 @@ exports.crearCita = async (req, res) => {
         telefonoParaGoogle = clienteRegistrado ? clienteRegistrado.whatsapp : 'No registrado'; 
       } else {
         clienteId = null;
-        nombreParaGoogle = `${nombreInvitado} (Walk-in)`;
+        nombreParaGoogle = `${nombreInvitado}`;
         telefonoParaGoogle = 'Cliente de paso'; 
       }
     }
@@ -158,7 +158,7 @@ exports.actualizarCita = async (req, res) => {
       return res.status(400).json({ mensaje: 'Ese nuevo horario está ocupado.' });
     }
 
-    const nombreParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.nombre : `${citaPrevia.nombreInvitado} (Walk-in)`;
+    const nombreParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.nombre : `${citaPrevia.nombreInvitado}`;
     const telefonoParaGoogle = citaPrevia.cliente ? citaPrevia.cliente.whatsapp : 'Cliente de paso';
 
     const googleRes = await calendar.events.insert({
@@ -208,7 +208,28 @@ exports.actualizarCita = async (req, res) => {
 
 exports.eliminarCita = async (req, res) => {
   try {
-    const cita = await Appointment.findById(req.params.id).populate('servicio cliente');
+    const { id } = req.params;
+
+    // Verificar si el ID es de MongoDB (tiene exactamente 24 caracteres hexadecimales)
+    const esIdMongo = /^[0-9a-fA-F]{24}$/.test(id);
+
+    // Si NO es de Mongo, significa que es un evento directo de Google Calendar
+    if (!esIdMongo) {
+      try {
+        await calendar.events.delete({ 
+          calendarId: ID_CALENDARIO, 
+          eventId: id,
+          sendUpdates: 'all'
+        });
+        return res.json({ mensaje: 'Evento externo eliminado de Google Calendar' });
+      } catch (gErr) {
+        console.log("Error borrando evento externo de Google:", gErr);
+        return res.status(500).json({ mensaje: 'No se pudo borrar el evento de Google' });
+      }
+    }
+
+    // --- Lógica normal si es una cita de MongoDB ---
+    const cita = await Appointment.findById(id).populate('servicio cliente');
     if (!cita) return res.status(404).json({ mensaje: 'Cita no encontrada' });
 
     const ahora = new Date();
@@ -222,12 +243,16 @@ exports.eliminarCita = async (req, res) => {
 
     if (cita.googleEventId) {
       try {
-        await calendar.events.delete({ calendarId: ID_CALENDARIO, eventId: cita.googleEventId });
+        await calendar.events.delete({ 
+          calendarId: ID_CALENDARIO, 
+          eventId: cita.googleEventId,
+          sendUpdates: 'all' 
+        });
       } catch (gErr) { console.log("No se pudo borrar de Google"); }
     }
 
     // --- ENVIAR NOTIFICACIÓN DE CANCELACIÓN (AL BARBERO) ---
-    const nombreParaGoogle = cita.cliente ? cita.cliente.nombre : `${cita.nombreInvitado} (Walk-in)`;
+    const nombreParaGoogle = cita.cliente ? cita.cliente.nombre : `${cita.nombreInvitado}`;
     const fechaLegible = new Date(cita.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     const mailOptions = {
@@ -243,23 +268,62 @@ exports.eliminarCita = async (req, res) => {
         </div>
       `
     };
+    const transporter = require('../config/mailer'); 
     transporter.sendMail(mailOptions).catch(err => console.log(err));
 
     await Appointment.findByIdAndDelete(req.params.id);
     res.json({ mensaje: 'Cita eliminada correctamente' });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ mensaje: 'Error al eliminar.' });
   }
 };
 
 exports.obtenerCitas = async (req, res) => {
   try {
-    const citas = await Appointment.find()
-      .sort({ fechaHora: 1 })
+    // 1. Obtenemos las citas de tu base de datos
+    const citasBD = await Appointment.find()
       .populate('servicio', 'nombre precio')
       .populate('cliente', 'nombre whatsapp');
-    res.status(200).json(citas);
+
+    // 2. Obtenemos los eventos directamente de Google Calendar 
+    // (Buscamos desde hace 1 mes en adelante para no saturar tu memoria)
+    const fechaLimite = new Date();
+    fechaLimite.setMonth(fechaLimite.getMonth() - 1);
+
+    const googleRes = await calendar.events.list({
+      calendarId: ID_CALENDARIO,
+      timeMin: fechaLimite.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+    });
+
+    const eventosGoogle = googleRes.data.items || [];
+
+    // 3. Filtramos: Sacamos los IDs de Google que ya tenemos en MongoDB para no duplicarlos
+    const idsGuardados = citasBD.map(c => c.googleEventId).filter(Boolean);
+    const eventosExternos = eventosGoogle.filter(evento => !idsGuardados.includes(evento.id));
+
+    // 4. Formateamos los eventos exclusivos de Google para que tu frontend de React los entienda
+    const citasExternasFormateadas = eventosExternos.map(evento => {
+      return {
+        _id: evento.id, // Usamos el ID de Google temporalmente
+        fechaHora: evento.start.dateTime || evento.start.date,
+        nombreInvitado: evento.summary || 'Bloqueo de Google',
+        cliente: null,
+        servicio: { nombre: 'Agendado en Google Calendar' },
+        notas: evento.description || 'Creado directamente desde la app de Google.',
+        esExterno: true // Una banderita por si te sirve en el frontend
+      };
+    });
+
+    // 5. Unimos ambas listas y las ordenamos por fecha de más antigua a más nueva
+    const todasLasCitas = [...citasBD, ...citasExternasFormateadas];
+    todasLasCitas.sort((a, b) => new Date(a.fechaHora) - new Date(b.fechaHora));
+
+    res.status(200).json(todasLasCitas);
   } catch (error) {
+    console.error("Error al obtener citas combinadas:", error);
     res.status(500).json({ mensaje: 'Error al obtener citas' });
   }
 };
