@@ -86,7 +86,7 @@ exports.crearCita = async (req, res) => {
     });
 
     const mailOptions = {
-      from: `"Barber Imperio Bot 💈" <${process.env.EMAIL_USER}>`,
+      from: `"Barber Studio Bot 💈" <${process.env.EMAIL_USER}>`,
       to: process.env.EMAIL_USER,
       subject: `✅ NUEVA CITA: ${nombreParaGoogle}`,
       html: `
@@ -98,7 +98,7 @@ exports.crearCita = async (req, res) => {
           <p><strong>WhatsApp:</strong> ${telefonoParaGoogle}</p>
           <p><strong>Notas:</strong> ${notas || 'Sin notas adicionales'}</p>
           <hr style="border: 1px solid #eee; margin: 20px 0;" />
-          <p style="font-size: 11px; color: #888;">Mensaje automático del panel de Barber Imperio.</p>
+          <p style="font-size: 11px; color: #888;">Mensaje automático del panel de Barber Studio.</p>
         </div>
       `
     };
@@ -182,7 +182,7 @@ exports.actualizarCita = async (req, res) => {
     const fechaNuevaLegible = new Date(nuevaFecha).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     const mailOptions = {
-      from: `"Barber Imperio Bot 💈" <${process.env.EMAIL_USER}>`,
+      from: `"Barber Studio Bot 💈" <${process.env.EMAIL_USER}>`,
       to: process.env.EMAIL_USER,
       subject: `🔄 REPROGRAMACIÓN: ${nombreParaGoogle}`,
       html: `
@@ -256,7 +256,7 @@ exports.eliminarCita = async (req, res) => {
     const fechaLegible = new Date(cita.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     const mailOptions = {
-      from: `"Barber Imperio Bot 💈" <${process.env.EMAIL_USER}>`,
+      from: `"Barber Studio Bot 💈" <${process.env.EMAIL_USER}>`,
       to: process.env.EMAIL_USER,
       subject: `❌ CITA CANCELADA: ${nombreParaGoogle}`,
       html: `
