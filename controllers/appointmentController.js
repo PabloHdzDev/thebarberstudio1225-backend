@@ -2,7 +2,8 @@ const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
 const calendar = require('../config/googleCalendar');
 const socket = require('../socket/socket');
-const transporter = require('../config/mailer'); // 👈 Tu nuevo sistema de notificaciones
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const ID_CALENDARIO = process.env.ID_CALENDARIO;
 
@@ -80,29 +81,32 @@ exports.crearCita = async (req, res) => {
       googleEventId: googleRes.data.id
     });
 
-    // --- ENVIAR NOTIFICACIÓN POR CORREO (AL BARBERO) ---
+    // --- ENVIAR NOTIFICACIÓN POR CORREO (AL BARBERO) CON RESEND ---
     const fechaLegible = new Date(fechaHora).toLocaleString('es-MX', {
       timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
     });
 
-    const mailOptions = {
-      from: `"Barber Studio Bot 💈" <${process.env.EMAIL_USER}>`,
-      to: process.env.EMAIL_USER,
-      subject: `✅ NUEVA CITA: ${nombreParaGoogle}`,
-      html: `
-        <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-w: 600px;">
-          <h2 style="color: #d4af37; margin-top: 0;">¡Tienes un nuevo turno agendado!</h2>
-          <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
-          <p><strong>Servicio:</strong> ${servicioBD.nombre} ($${servicioBD.precio})</p>
-          <p><strong>Fecha y Hora:</strong> ${fechaLegible}</p>
-          <p><strong>WhatsApp:</strong> ${telefonoParaGoogle}</p>
-          <p><strong>Notas:</strong> ${notas || 'Sin notas adicionales'}</p>
-          <hr style="border: 1px solid #eee; margin: 20px 0;" />
-          <p style="font-size: 11px; color: #888;">Mensaje automático del panel de Barber Studio.</p>
-        </div>
-      `
-    };
-    transporter.sendMail(mailOptions).catch(err => console.error("Error enviando email:", err));
+    try {
+      await resend.emails.send({
+        from: 'onboarding@resend.dev',
+        to: process.env.EMAIL_USER,
+        subject: `✅ NUEVA CITA: ${nombreParaGoogle}`,
+        html: `
+          <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-w: 600px;">
+            <h2 style="color: #d4af37; margin-top: 0;">¡Tienes un nuevo turno agendado!</h2>
+            <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
+            <p><strong>Servicio:</strong> ${servicioBD.nombre} ($${servicioBD.precio})</p>
+            <p><strong>Fecha y Hora:</strong> ${fechaLegible}</p>
+            <p><strong>WhatsApp:</strong> ${telefonoParaGoogle}</p>
+            <p><strong>Notas:</strong> ${notas || 'Sin notas adicionales'}</p>
+            <hr style="border: 1px solid #eee; margin: 20px 0;" />
+            <p style="font-size: 11px; color: #888;">Mensaje automático del panel de Barber Studio.</p>
+          </div>
+        `
+      });
+    } catch (emailError) {
+      console.error("⚠️ Error enviando correo de nueva cita:", emailError);
+    }
 
     const citaPoblada = await Appointment.findById(nuevaCita._id)
       .populate('servicio', 'nombre precio')
@@ -177,25 +181,28 @@ exports.actualizarCita = async (req, res) => {
       { new: true }
     ).populate('servicio cliente');
 
-    // --- ENVIAR NOTIFICACIÓN DE REPROGRAMACIÓN (AL BARBERO) ---
+    // --- ENVIAR NOTIFICACIÓN DE REPROGRAMACIÓN (AL BARBERO) CON RESEND ---
     const fechaAntiguaLegible = new Date(citaPrevia.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
     const fechaNuevaLegible = new Date(nuevaFecha).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-    const mailOptions = {
-      from: `"Barber Studio Bot 💈" <${process.env.EMAIL_USER}>`,
-      to: process.env.EMAIL_USER,
-      subject: `🔄 REPROGRAMACIÓN: ${nombreParaGoogle}`,
-      html: `
-        <div style="font-family: sans-serif; border: 2px solid #2196F3; padding: 20px; border-radius: 10px; max-w: 600px;">
-          <h2 style="color: #2196F3; margin-top: 0;">Cita Reprogramada</h2>
-          <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
-          <p><strong>Día anterior:</strong> <strike>${fechaAntiguaLegible}</strike></p>
-          <p><strong>Nuevo Horario:</strong> <strong>${fechaNuevaLegible}</strong></p>
-          <p><strong>Notas actualizadas:</strong> ${notas || 'Sin notas'}</p>
-        </div>
-      `
-    };
-    transporter.sendMail(mailOptions).catch(err => console.log(err));
+    try {
+      await resend.emails.send({
+        from: 'onboarding@resend.dev',
+        to: process.env.EMAIL_USER,
+        subject: `🔄 REPROGRAMACIÓN: ${nombreParaGoogle}`,
+        html: `
+          <div style="font-family: sans-serif; border: 2px solid #2196F3; padding: 20px; border-radius: 10px; max-w: 600px;">
+            <h2 style="color: #2196F3; margin-top: 0;">Cita Reprogramada</h2>
+            <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
+            <p><strong>Día anterior:</strong> <strike>${fechaAntiguaLegible}</strike></p>
+            <p><strong>Nuevo Horario:</strong> <strong>${fechaNuevaLegible}</strong></p>
+            <p><strong>Notas actualizadas:</strong> ${notas || 'Sin notas'}</p>
+          </div>
+        `
+      });
+    } catch (emailError) {
+      console.error("⚠️ Error enviando correo de reprogramación:", emailError);
+    }
 
     socket.getIo().emit('notificar_cita', citaActualizada);
     res.json({ mensaje: 'Cita actualizada correctamente', cita: citaActualizada });
@@ -251,24 +258,27 @@ exports.eliminarCita = async (req, res) => {
       } catch (gErr) { console.log("No se pudo borrar de Google"); }
     }
 
-    // --- ENVIAR NOTIFICACIÓN DE CANCELACIÓN (AL BARBERO) ---
+    // --- ENVIAR NOTIFICACIÓN DE CANCELACIÓN (AL BARBERO) CON RESEND ---
     const nombreParaGoogle = cita.cliente ? cita.cliente.nombre : `${cita.nombreInvitado}`;
     const fechaLegible = new Date(cita.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-    const mailOptions = {
-      from: `"Barber Studio Bot 💈" <${process.env.EMAIL_USER}>`,
-      to: process.env.EMAIL_USER,
-      subject: `❌ CITA CANCELADA: ${nombreParaGoogle}`,
-      html: `
-        <div style="font-family: sans-serif; border: 2px solid #F44336; padding: 20px; border-radius: 10px; max-w: 600px;">
-          <h2 style="color: #F44336; margin-top: 0;">Un turno se ha liberado</h2>
-          <p>El cliente <strong>${nombreParaGoogle}</strong> acaba de cancelar su cita.</p>
-          <p><strong>Horario liberado:</strong> ${fechaLegible}</p>
-          <p><strong>Servicio:</strong> ${cita.servicio?.nombre || 'No especificado'}</p>
-        </div>
-      `
-    };
-    transporter.sendMail(mailOptions).catch(err => console.log(err));
+    try {
+      await resend.emails.send({
+        from: 'onboarding@resend.dev',
+        to: process.env.EMAIL_USER,
+        subject: `❌ CITA CANCELADA: ${nombreParaGoogle}`,
+        html: `
+          <div style="font-family: sans-serif; border: 2px solid #F44336; padding: 20px; border-radius: 10px; max-w: 600px;">
+            <h2 style="color: #F44336; margin-top: 0;">Un turno se ha liberado</h2>
+            <p>El cliente <strong>${nombreParaGoogle}</strong> acaba de cancelar su cita.</p>
+            <p><strong>Horario liberado:</strong> ${fechaLegible}</p>
+            <p><strong>Servicio:</strong> ${cita.servicio?.nombre || 'No especificado'}</p>
+          </div>
+        `
+      });
+    } catch (emailError) {
+      console.error("⚠️ Error enviando correo de cancelación:", emailError);
+    }
 
     await Appointment.findByIdAndDelete(req.params.id);
     res.json({ mensaje: 'Cita eliminada correctamente' });
