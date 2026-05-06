@@ -268,7 +268,6 @@ exports.eliminarCita = async (req, res) => {
         </div>
       `
     };
-    const transporter = require('../config/mailer'); 
     transporter.sendMail(mailOptions).catch(err => console.log(err));
 
     await Appointment.findByIdAndDelete(req.params.id);
