@@ -16,4 +16,7 @@ router.post('/login', authController.iniciarSesion);
 // GET /api/auth/usuarios -> Obtiene la lista (usando la nueva función)
 router.get('/usuarios', protegerRuta, soloBarbero, authController.obtenerUsuarios);
 
+// PUT /api/auth/cambiar-password -> Cambia la contraseña del usuario autenticado
+router.put('/cambiar-password', protegerRuta, authController.cambiarPassword);
+
 module.exports = router;

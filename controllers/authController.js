@@ -1,6 +1,7 @@
 // backend/controllers/authController.js
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 
 // Función auxiliar para generar el Token
 const generarToken = (id, rol) => {
@@ -77,5 +78,41 @@ exports.obtenerUsuarios = async (req, res) => {
   } catch (error) {
     console.error("Error al obtener usuarios:", error);
     res.status(500).json({ mensaje: 'Error al obtener la lista de clientes' });
+  }
+};
+
+exports.cambiarPassword = async (req, res) => {
+  try {
+    const { contrasenaActual, nuevaContrasena } = req.body;
+
+    // 1. Validación básica
+    if (!contrasenaActual || !nuevaContrasena) {
+      return res.status(400).json({ mensaje: 'Por favor, envía ambas contraseñas' });
+    }
+    if (nuevaContrasena.length < 6) {
+      return res.status(400).json({ mensaje: 'La nueva contraseña debe tener al menos 6 caracteres' });
+    }
+
+    // 2. Buscamos al usuario (usamos select('+password') por si lo tienes oculto por defecto)
+    const usuario = await User.findById(req.user._id).select('+password');
+    if (!usuario) {
+      return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+    }
+
+    // 3. Verificamos usando TU método personalizado
+    const esCorrecta = await usuario.matchPassword(contrasenaActual);
+    if (!esCorrecta) {
+      return res.status(401).json({ mensaje: 'La contraseña actual es incorrecta' });
+    }
+
+    // 4. Asignamos la nueva contraseña (¡Tu modelo se encarga de encriptarla!)
+    usuario.password = nuevaContrasena;
+    await usuario.save(); // Aquí se dispara tu UserSchema.pre('save') automáticamente
+
+    res.json({ mensaje: 'Contraseña actualizada con éxito' });
+
+  } catch (error) {
+    console.error('Error al cambiar contraseña:', error);
+    res.status(500).json({ mensaje: 'Hubo un error al procesar el cambio de contraseña' });
   }
 };
