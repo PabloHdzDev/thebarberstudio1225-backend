@@ -15,9 +15,9 @@ exports.crearCita = async (req, res) => {
 
     // --- RESTRICCIÓN DE TIEMPO ---
     const diferenciaCreacion = (citaFecha - ahora) / (1000 * 60 * 60);
-    if (req.user.rol !== 'barbero' && diferenciaCreacion < 4) {
+    if (req.user.rol !== 'barbero' && diferenciaCreacion < 1) {
       return res.status(400).json({ 
-        mensaje: 'Las citas deben agendarse con al menos 4 horas de anticipación.' 
+        mensaje: 'Las citas deben agendarse con al menos 1 hora de anticipación.' 
       });
     }
 
