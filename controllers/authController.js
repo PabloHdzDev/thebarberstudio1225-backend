@@ -56,6 +56,9 @@ const { identificador, password } = req.body;
     });
 
     if (usuario && (await usuario.matchPassword(password))) {
+      if (usuario.activo === false) {
+        return res.status(403).json({ mensaje: 'Tu cuenta ha sido suspendida. Contacta a la barbería.' });
+      }
       res.json({
         _id: usuario._id,
         nombre: usuario.nombre,
@@ -78,6 +81,17 @@ exports.obtenerUsuarios = async (req, res) => {
   } catch (error) {
     console.error("Error al obtener usuarios:", error);
     res.status(500).json({ mensaje: 'Error al obtener la lista de clientes' });
+  }
+};
+
+exports.obtenerPerfil = async (req, res) => {
+  try {
+    const usuario = await User.findById(req.user._id).select('-password');
+    if (!usuario) return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+    // toObject({ virtuals: true }) incluye el virtual "nivel"
+    res.json(usuario.toObject({ virtuals: true }));
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al obtener el perfil' });
   }
 };
 

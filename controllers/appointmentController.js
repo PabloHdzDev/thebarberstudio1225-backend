@@ -1,48 +1,57 @@
 const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
+const User = require('../models/User');
 const calendar = require('../config/googleCalendar');
 const socket = require('../socket/socket');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const ID_CALENDARIO = process.env.ID_CALENDARIO;
+const META_VISITAS_PREMIO = 5;
 
 exports.crearCita = async (req, res) => {
   try {
-    const { servicio, fechaHora, notas, cliente, nombreInvitado } = req.body;
+    const { servicio, fechaHora, notas, cliente, nombreInvitado, esPremio } = req.body;
     const citaFecha = new Date(fechaHora);
     const ahora = new Date();
 
     // --- RESTRICCIÓN DE TIEMPO ---
     const diferenciaCreacion = (citaFecha - ahora) / (1000 * 60 * 60);
     if (req.user.rol !== 'barbero' && diferenciaCreacion < 1) {
-      return res.status(400).json({ 
-        mensaje: 'Las citas deben agendarse con al menos 1 hora de anticipación.' 
+      return res.status(400).json({
+        mensaje: 'Las citas deben agendarse con al menos 1 hora de anticipación.'
       });
+    }
+
+    // --- VALIDACIÓN DE PREMIO (solo clientes, no barberos) ---
+    if (esPremio && req.user.rol !== 'barbero') {
+      // req.user viene del middleware con datos frescos de BD
+      if (!req.user.premioPendiente) {
+        return res.status(403).json({ mensaje: 'No tienes un premio disponible para canjear.' });
+      }
     }
 
     const servicioBD = await Service.findById(servicio);
     if (!servicioBD) return res.status(404).json({ mensaje: 'Servicio no encontrado' });
-    
+
     const duracion = servicioBD.duracionMinutos || 30;
     const finCita = new Date(citaFecha.getTime() + duracion * 60000);
 
     // --- LÓGICA DE IDENTIFICACIÓN ---
     let clienteId = req.user._id;
     let nombreParaGoogle = req.user.nombre;
-    let telefonoParaGoogle = req.user.whatsapp || 'No registrado'; 
+    let telefonoParaGoogle = req.user.whatsapp || 'No registrado';
 
     if (req.user.rol === 'barbero') {
       if (cliente) {
-        const User = require('../models/User'); 
         const clienteRegistrado = await User.findById(cliente);
         clienteId = cliente;
         nombreParaGoogle = clienteRegistrado ? clienteRegistrado.nombre : 'Cliente';
-        telefonoParaGoogle = clienteRegistrado ? clienteRegistrado.whatsapp : 'No registrado'; 
+        telefonoParaGoogle = clienteRegistrado ? clienteRegistrado.whatsapp : 'No registrado';
       } else {
         clienteId = null;
         nombreParaGoogle = `${nombreInvitado}`;
-        telefonoParaGoogle = 'Cliente de paso'; 
+        telefonoParaGoogle = 'Cliente de paso';
       }
     }
 
@@ -60,16 +69,20 @@ exports.crearCita = async (req, res) => {
       return res.status(400).json({ mensaje: 'Este horario ya está ocupado en el calendario.' });
     }
 
+    const premioTexto = esPremio && req.user.rol !== 'barbero' ? ' 🎁 PREMIO 50% OFF' : '';
+
     // Insertar en Google Calendar
     const googleRes = await calendar.events.insert({
       calendarId: ID_CALENDARIO,
       resource: {
-        summary: `💈 Corte: ${nombreParaGoogle}`,
+        summary: `💈 Corte: ${nombreParaGoogle}${premioTexto}`,
         description: `📱 WhatsApp: ${telefonoParaGoogle}\n✂️ Servicio: ${servicioBD.nombre}\n📝 Notas: ${notas || 'Ninguna'}`,
         start: { dateTime: citaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finCita.toISOString(), timeZone: 'America/Mexico_City' },
       }
     });
+
+    const citaEsPremio = Boolean(esPremio && req.user.rol !== 'barbero');
 
     // Guardar en MongoDB
     const nuevaCita = await Appointment.create({
@@ -78,8 +91,14 @@ exports.crearCita = async (req, res) => {
       nombreInvitado: clienteId ? null : nombreInvitado,
       fechaHora,
       notas,
-      googleEventId: googleRes.data.id
+      googleEventId: googleRes.data.id,
+      esPremio: citaEsPremio
     });
+
+    // Si es premio de cliente, limpiar el flag en el usuario
+    if (citaEsPremio && clienteId) {
+      await User.findByIdAndUpdate(clienteId, { premioPendiente: false });
+    }
 
     // --- ENVIAR NOTIFICACIÓN POR CORREO (AL BARBERO) CON RESEND ---
     const fechaLegible = new Date(fechaHora).toLocaleString('es-MX', {
@@ -90,12 +109,13 @@ exports.crearCita = async (req, res) => {
       await resend.emails.send({
         from: 'onboarding@resend.dev',
         to: process.env.EMAIL_USER,
-        subject: `✅ NUEVA CITA: ${nombreParaGoogle}`,
+        subject: `✅ NUEVA CITA: ${nombreParaGoogle}${premioTexto}`,
         html: `
           <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-w: 600px;">
             <h2 style="color: #d4af37; margin-top: 0;">¡Tienes un nuevo turno agendado!</h2>
             <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
             <p><strong>Servicio:</strong> ${servicioBD.nombre} ($${servicioBD.precio})</p>
+            ${citaEsPremio ? '<p style="color:#d4af37;font-weight:bold;">🎁 CITA CON PREMIO 50% OFF</p>' : ''}
             <p><strong>Fecha y Hora:</strong> ${fechaLegible}</p>
             <p><strong>WhatsApp:</strong> ${telefonoParaGoogle}</p>
             <p><strong>Notas:</strong> ${notas || 'Sin notas adicionales'}</p>
@@ -134,8 +154,8 @@ exports.actualizarCita = async (req, res) => {
     const diferenciaHoras = (tiempoCitaOriginal - ahora) / (1000 * 60 * 60);
 
     if (diferenciaHoras < 24 && req.user.rol !== 'barbero') {
-      return res.status(400).json({ 
-        mensaje: 'Los cambios requieren 24 horas de anticipación. Contacta a la barbería.' 
+      return res.status(400).json({
+        mensaje: 'Los cambios requieren 24 horas de anticipación. Contacta a la barbería.'
       });
     }
 
@@ -181,7 +201,7 @@ exports.actualizarCita = async (req, res) => {
       { new: true }
     ).populate('servicio cliente');
 
-    // --- ENVIAR NOTIFICACIÓN DE REPROGRAMACIÓN (AL BARBERO) CON RESEND ---
+    // --- ENVIAR NOTIFICACIÓN DE REPROGRAMACIÓN ---
     const fechaAntiguaLegible = new Date(citaPrevia.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
     const fechaNuevaLegible = new Date(nuevaFecha).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -217,14 +237,12 @@ exports.eliminarCita = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Verificar si el ID es de MongoDB (tiene exactamente 24 caracteres hexadecimales)
     const esIdMongo = /^[0-9a-fA-F]{24}$/.test(id);
 
-    // Si NO es de Mongo, significa que es un evento directo de Google Calendar
     if (!esIdMongo) {
       try {
-        await calendar.events.delete({ 
-          calendarId: ID_CALENDARIO, 
+        await calendar.events.delete({
+          calendarId: ID_CALENDARIO,
           eventId: id,
           sendUpdates: 'all'
         });
@@ -235,7 +253,6 @@ exports.eliminarCita = async (req, res) => {
       }
     }
 
-    // --- Lógica normal si es una cita de MongoDB ---
     const cita = await Appointment.findById(id).populate('servicio cliente');
     if (!cita) return res.status(404).json({ mensaje: 'Cita no encontrada' });
 
@@ -243,24 +260,25 @@ exports.eliminarCita = async (req, res) => {
     const diferenciaHoras = (cita.fechaHora - ahora) / (1000 * 60 * 60);
 
     if (diferenciaHoras < 24 && req.user.rol !== 'barbero') {
-      return res.status(400).json({ 
-        mensaje: 'Las cancelaciones requieren 24 horas de anticipación.' 
+      return res.status(400).json({
+        mensaje: 'Las cancelaciones requieren 24 horas de anticipación.'
       });
     }
 
     if (cita.googleEventId) {
       try {
-        await calendar.events.delete({ 
-          calendarId: ID_CALENDARIO, 
+        await calendar.events.delete({
+          calendarId: ID_CALENDARIO,
           eventId: cita.googleEventId,
-          sendUpdates: 'all' 
+          sendUpdates: 'all'
         });
       } catch (gErr) { console.log("No se pudo borrar de Google"); }
     }
 
-    // --- ENVIAR NOTIFICACIÓN DE CANCELACIÓN (AL BARBERO) CON RESEND ---
     const nombreParaGoogle = cita.cliente ? cita.cliente.nombre : `${cita.nombreInvitado}`;
-    const fechaLegible = new Date(cita.fechaHora).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const fechaLegible = new Date(cita.fechaHora).toLocaleString('es-MX', {
+      timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
 
     try {
       await resend.emails.send({
@@ -288,15 +306,89 @@ exports.eliminarCita = async (req, res) => {
   }
 };
 
+// Procesa automáticamente todas las citas pendientes cuya hora ya pasó.
+// Se asume que el cliente asistió; actualiza fidelidad y marca como completada.
+const procesarCitasPasadas = async () => {
+  const pendientes = await Appointment.find({
+    estado: { $nin: ['completada', 'cancelada'] },
+    esExterno: { $ne: true },
+    fechaHora: { $lt: new Date() }
+  }).populate('servicio');
+
+  for (const cita of pendientes) {
+    cita.estado = 'completada';
+    await cita.save();
+
+    if (cita.cliente) {
+      const usuario = await User.findById(cita.cliente);
+      if (usuario) {
+        usuario.contadorVisitas += 1;
+        usuario.totalVisitas += 1;
+        const precio = cita.esPremio
+          ? Math.round((cita.servicio?.precio || 0) / 2)
+          : (cita.servicio?.precio || 0);
+        usuario.totalGastado += precio;
+        usuario.ultimaVisita = cita.fechaHora;
+        if (usuario.contadorVisitas >= META_VISITAS_PREMIO) {
+          usuario.premioPendiente = true;
+          usuario.contadorVisitas = 0;
+        }
+        await usuario.save();
+      }
+    }
+  }
+};
+
+exports.sincronizarHistorial = async (req, res) => {
+  try {
+    const pendientes = await Appointment.find({
+      estado: { $nin: ['completada', 'cancelada'] },
+      esExterno: { $ne: true },
+      fechaHora: { $lt: new Date() }
+    }).populate('servicio');
+
+    let procesadas = 0;
+    for (const cita of pendientes) {
+      cita.estado = 'completada';
+      await cita.save();
+      procesadas++;
+
+      if (cita.cliente) {
+        const usuario = await User.findById(cita.cliente);
+        if (usuario) {
+          usuario.contadorVisitas += 1;
+          usuario.totalVisitas += 1;
+          const precio = cita.esPremio
+            ? Math.round((cita.servicio?.precio || 0) / 2)
+            : (cita.servicio?.precio || 0);
+          usuario.totalGastado += precio;
+          if (!usuario.ultimaVisita || cita.fechaHora > usuario.ultimaVisita) {
+            usuario.ultimaVisita = cita.fechaHora;
+          }
+          if (usuario.contadorVisitas >= META_VISITAS_PREMIO) {
+            usuario.premioPendiente = true;
+            usuario.contadorVisitas = 0;
+          }
+          await usuario.save();
+        }
+      }
+    }
+
+    res.json({ mensaje: `Sincronización completa. ${procesadas} cita(s) procesada(s).`, procesadas });
+  } catch (error) {
+    console.error('Error en sincronización:', error);
+    res.status(500).json({ mensaje: 'Error al sincronizar el historial' });
+  }
+};
+
 exports.obtenerCitas = async (req, res) => {
   try {
-    // 1. Obtenemos las citas de tu base de datos
+    await procesarCitasPasadas();
+
     const citasBD = await Appointment.find()
       .populate('servicio', 'nombre precio')
       .populate('cliente', 'nombre whatsapp');
 
-    // 2. Obtenemos los eventos directamente de Google Calendar 
-    // (Buscamos desde hace 1 mes en adelante para no saturar tu memoria)
     const fechaLimite = new Date();
     fechaLimite.setMonth(fechaLimite.getMonth() - 1);
 
@@ -308,25 +400,19 @@ exports.obtenerCitas = async (req, res) => {
     });
 
     const eventosGoogle = googleRes.data.items || [];
-
-    // 3. Filtramos: Sacamos los IDs de Google que ya tenemos en MongoDB para no duplicarlos
     const idsGuardados = citasBD.map(c => c.googleEventId).filter(Boolean);
     const eventosExternos = eventosGoogle.filter(evento => !idsGuardados.includes(evento.id));
 
-    // 4. Formateamos los eventos exclusivos de Google para que tu frontend de React los entienda
-    const citasExternasFormateadas = eventosExternos.map(evento => {
-      return {
-        _id: evento.id, // Usamos el ID de Google temporalmente
-        fechaHora: evento.start.dateTime || evento.start.date,
-        nombreInvitado: evento.summary || 'Bloqueo de Google',
-        cliente: null,
-        servicio: { nombre: 'Agendado en Google Calendar' },
-        notas: evento.description || 'Creado directamente desde la app de Google.',
-        esExterno: true // Una banderita por si te sirve en el frontend
-      };
-    });
+    const citasExternasFormateadas = eventosExternos.map(evento => ({
+      _id: evento.id,
+      fechaHora: evento.start.dateTime || evento.start.date,
+      nombreInvitado: evento.summary || 'Bloqueo de Google',
+      cliente: null,
+      servicio: { nombre: 'Agendado en Google Calendar' },
+      notas: evento.description || 'Creado directamente desde la app de Google.',
+      esExterno: true
+    }));
 
-    // 5. Unimos ambas listas y las ordenamos por fecha de más antigua a más nueva
     const todasLasCitas = [...citasBD, ...citasExternasFormateadas];
     todasLasCitas.sort((a, b) => new Date(a.fechaHora) - new Date(b.fechaHora));
 
@@ -350,8 +436,8 @@ exports.obtenerMisCitas = async (req, res) => {
 
 exports.consultarDisponibilidad = async (req, res) => {
   try {
-    const { fecha } = req.params; 
-    
+    const { fecha } = req.params;
+
     const timeMin = new Date(`${fecha}T00:00:00-06:00`).toISOString();
     const timeMax = new Date(`${fecha}T23:59:59-06:00`).toISOString();
 
