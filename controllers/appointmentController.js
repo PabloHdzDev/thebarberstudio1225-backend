@@ -438,6 +438,10 @@ exports.consultarDisponibilidad = async (req, res) => {
   try {
     const { fecha } = req.params;
 
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ mensaje: 'Formato de fecha inválido. Se espera YYYY-MM-DD.' });
+    }
+
     const timeMin = new Date(`${fecha}T00:00:00-06:00`).toISOString();
     const timeMax = new Date(`${fecha}T23:59:59-06:00`).toISOString();
 
@@ -446,13 +450,13 @@ exports.consultarDisponibilidad = async (req, res) => {
         timeMin,
         timeMax,
         timeZone: 'America/Mexico_City',
-        items: [{ id: process.env.ID_CALENDARIO }],
+        items: [{ id: ID_CALENDARIO }],
       },
     });
 
-    res.json(consulta.data.calendars[process.env.ID_CALENDARIO].busy);
+    res.json(consulta.data.calendars[ID_CALENDARIO].busy);
   } catch (error) {
-    console.error(error);
+    console.error('Error al consultar disponibilidad:', error);
     res.status(500).json({ mensaje: 'Error al consultar Google Calendar' });
   }
 };

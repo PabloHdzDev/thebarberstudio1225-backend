@@ -32,6 +32,7 @@ app.use('/api/citas', require('./routes/appointmentRoutes'));
 app.use('/api/servicios', require('./routes/serviceRoutes'));
 app.use('/api/productos', require('./routes/productRoutes'));
 app.use('/api/clientes', require('./routes/clienteRoutes'));
+app.use('/api/horarios', require('./routes/horarioRoutes'));
 
 // --- LÓGICA DE SOCKETS ---
 io.on('connection', (socket) => {
