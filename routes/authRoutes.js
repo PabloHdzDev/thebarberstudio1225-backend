@@ -22,4 +22,14 @@ router.get('/perfil', protegerRuta, authController.obtenerPerfil);
 // PUT /api/auth/cambiar-password -> Cambia la contraseña del usuario autenticado
 router.put('/cambiar-password', protegerRuta, authController.cambiarPassword);
 
+// --- Recuperación de contraseña (público: el usuario no puede iniciar sesión) ---
+// POST /api/auth/olvide-password -> Genera el enlace y avisa al barbero
+router.post('/olvide-password', authController.solicitarReset);
+
+// GET /api/auth/reset/:token -> Comprueba si el enlace sigue vigente
+router.get('/reset/:token', authController.verificarTokenReset);
+
+// POST /api/auth/reset/:token -> Guarda la contraseña nueva
+router.post('/reset/:token', authController.restablecerPassword);
+
 module.exports = router;

@@ -2,6 +2,14 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+// El enlace de recuperación vive 1 hora
+const VIGENCIA_RESET_MS = 60 * 60 * 1000;
+
+const hashearToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 // Función auxiliar para generar el Token
 const generarToken = (id, rol) => {
@@ -128,5 +136,132 @@ exports.cambiarPassword = async (req, res) => {
   } catch (error) {
     console.error('Error al cambiar contraseña:', error);
     res.status(500).json({ mensaje: 'Hubo un error al procesar el cambio de contraseña' });
+  }
+};
+// ── RECUPERACIÓN DE CONTRASEÑA ──────────────────────────────────────────────
+// El cliente pide recuperar; al barbero le llega un aviso con un enlace de un
+// solo uso que él reenvía por WhatsApp. El cliente elige su propia contraseña.
+
+exports.solicitarReset = async (req, res) => {
+  try {
+    const { identificador } = req.body;
+
+    if (!identificador || !identificador.trim()) {
+      return res.status(400).json({ mensaje: 'Escribe tu correo o tu WhatsApp.' });
+    }
+
+    const busqueda = identificador.trim();
+    const usuario = await User.findOne({
+      $or: [{ email: busqueda }, { whatsapp: busqueda }]
+    });
+
+    // Respuesta idéntica exista o no la cuenta, para no revelar quién está registrado
+    const respuestaGenerica = {
+      mensaje: 'Si la cuenta existe, la barbería recibirá tu solicitud y te enviará un enlace por WhatsApp para crear una contraseña nueva.'
+    };
+
+    if (!usuario || usuario.activo === false) {
+      return res.json(respuestaGenerica);
+    }
+
+    // El token viaja en el enlace; en la base solo queda su hash
+    const token = crypto.randomBytes(32).toString('hex');
+    usuario.resetTokenHash = hashearToken(token);
+    usuario.resetTokenExpira = new Date(Date.now() + VIGENCIA_RESET_MS);
+    await usuario.save();
+
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const enlace = `${baseUrl}/restablecer/${token}`;
+
+    const textoWhats = encodeURIComponent(
+      `Hola ${usuario.nombre}, aquí puedes crear tu nueva contraseña de The Barber Studio 1225: ${enlace}\n\nEl enlace vence en 1 hora.`
+    );
+    const enlaceWhats = `https://wa.me/${usuario.whatsapp}?text=${textoWhats}`;
+
+    try {
+      await resend.emails.send({
+        from: 'onboarding@resend.dev',
+        to: process.env.EMAIL_USER,
+        subject: `🔑 Recuperación de contraseña: ${usuario.nombre}`,
+        html: `
+          <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-width: 600px;">
+            <h2 style="color: #d4af37; margin-top: 0;">Un cliente quiere recuperar su contraseña</h2>
+            <p><strong>Cliente:</strong> ${usuario.nombre}</p>
+            <p><strong>Correo:</strong> ${usuario.email}</p>
+            <p><strong>WhatsApp:</strong> ${usuario.whatsapp}</p>
+            <hr style="border: 1px solid #eee; margin: 20px 0;" />
+            <p style="margin-bottom: 18px;">Mándale este enlace para que cree su nueva contraseña:</p>
+            <p style="text-align: center; margin: 24px 0;">
+              <a href="${enlaceWhats}" style="background:#25D366;color:#fff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:bold;display:inline-block;">
+                Enviar por WhatsApp
+              </a>
+            </p>
+            <p style="font-size: 12px; color: #888;">O copia y pega el enlace manualmente:</p>
+            <p style="font-size: 12px; word-break: break-all; background:#f5f5f5; padding:10px; border-radius:6px;">${enlace}</p>
+            <hr style="border: 1px solid #eee; margin: 20px 0;" />
+            <p style="font-size: 11px; color: #888;">
+              El enlace vence en 1 hora y solo se puede usar una vez. Si no reconoces esta solicitud, ignora este correo: sin el enlace no se puede cambiar nada.
+            </p>
+          </div>
+        `
+      });
+    } catch (emailError) {
+      console.error('⚠️ Error enviando correo de recuperación:', emailError);
+    }
+
+    res.json(respuestaGenerica);
+  } catch (error) {
+    console.error('Error al solicitar recuperación:', error);
+    res.status(500).json({ mensaje: 'Error al procesar la solicitud' });
+  }
+};
+
+// Permite a la página saber si el enlace sigue sirviendo antes de pedir la contraseña
+exports.verificarTokenReset = async (req, res) => {
+  try {
+    const usuario = await User.findOne({
+      resetTokenHash: hashearToken(req.params.token),
+      resetTokenExpira: { $gt: new Date() }
+    });
+
+    if (!usuario) {
+      return res.status(400).json({ valido: false, mensaje: 'Este enlace ya venció o no es válido.' });
+    }
+
+    res.json({ valido: true, nombre: usuario.nombre });
+  } catch (error) {
+    console.error('Error al verificar token:', error);
+    res.status(500).json({ valido: false, mensaje: 'Error al verificar el enlace' });
+  }
+};
+
+exports.restablecerPassword = async (req, res) => {
+  try {
+    const { nuevaContrasena } = req.body;
+
+    if (!nuevaContrasena || nuevaContrasena.length < 6) {
+      return res.status(400).json({ mensaje: 'La contraseña debe tener al menos 6 caracteres.' });
+    }
+
+    const usuario = await User.findOne({
+      resetTokenHash: hashearToken(req.params.token),
+      resetTokenExpira: { $gt: new Date() }
+    });
+
+    if (!usuario) {
+      return res.status(400).json({ mensaje: 'Este enlace ya venció o no es válido.' });
+    }
+
+    // El hook pre('save') del modelo se encarga de encriptarla
+    usuario.password = nuevaContrasena;
+    // Se invalida el enlace para que no pueda reutilizarse
+    usuario.resetTokenHash = null;
+    usuario.resetTokenExpira = null;
+    await usuario.save();
+
+    res.json({ mensaje: 'Contraseña actualizada. Ya puedes iniciar sesión.' });
+  } catch (error) {
+    console.error('Error al restablecer contraseña:', error);
+    res.status(500).json({ mensaje: 'Error al restablecer la contraseña' });
   }
 };

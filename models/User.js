@@ -24,7 +24,12 @@ const UserSchema = new mongoose.Schema({
   // true cuando el cliente acumuló suficientes visitas y puede canjear su premio
   premioPendiente: { type: Boolean, default: false },
   // false = cuenta bloqueada por el barbero
-  activo: { type: Boolean, default: true }
+  activo: { type: Boolean, default: true },
+
+  // --- Recuperación de contraseña ---
+  // Se guarda solo el hash del token; el original viaja en el enlace y nunca se almacena
+  resetTokenHash: { type: String, default: null },
+  resetTokenExpira: { type: Date, default: null }
 
 }, { timestamps: true });
 
