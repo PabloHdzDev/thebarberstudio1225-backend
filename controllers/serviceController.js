@@ -3,7 +3,7 @@ const Service = require('../models/Service');
 exports.crearServicio = async (req, res) => {
   try {
     // 👇 1. Extraemos los nuevos campos del req.body
-    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior } = req.body;
+    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior, aplicaPremio } = req.body;
 
     // Si Multer procesó una imagen, estará en req.file
     const urlImagen = req.file ? req.file.path : '';
@@ -18,6 +18,7 @@ exports.crearServicio = async (req, res) => {
       orden: orden ? parseInt(orden) : 0,
       esOferta: esOferta === 'true' || esOferta === true,
       precioAnterior: precioAnterior ? parseFloat(precioAnterior) : 0,
+      aplicaPremio: aplicaPremio === 'true' || aplicaPremio === true,
       imagen: urlImagen
     });
 
@@ -73,7 +74,7 @@ exports.actualizarServicio = async (req, res) => {
     const { id } = req.params;
     
     // 👇 2. También extraemos los nuevos campos aquí
-    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior } = req.body;
+    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior, aplicaPremio } = req.body;
 
     let updateData = { nombre, descripcion, precio, duracionMinutos };
 
@@ -82,6 +83,7 @@ exports.actualizarServicio = async (req, res) => {
     if (orden !== undefined) updateData.orden = parseInt(orden);
     if (esOferta !== undefined) updateData.esOferta = esOferta === 'true' || esOferta === true;
     if (precioAnterior !== undefined) updateData.precioAnterior = parseFloat(precioAnterior);
+    if (aplicaPremio !== undefined) updateData.aplicaPremio = aplicaPremio === 'true' || aplicaPremio === true;
 
     // Si el barbero subió una foto nueva, actualizamos el link
     if (req.file) {

@@ -9,7 +9,10 @@ const serviceSchema = new mongoose.Schema({
   activo: { type: Boolean, default: true },
   orden: { type: Number, default: 0 },
   esOferta: { type: Boolean, default: false },
-  precioAnterior: { type: Number }
+  precioAnterior: { type: Number },
+  // true = este servicio se puede pagar con el premio de lealtad (50% off).
+  // Se limita a cortes sencillos para que el premio no aplique a paquetes.
+  aplicaPremio: { type: Boolean, default: false }
 });
 
 module.exports = mongoose.model('Service', serviceSchema);

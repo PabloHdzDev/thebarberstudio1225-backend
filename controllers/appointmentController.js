@@ -34,6 +34,13 @@ exports.crearCita = async (req, res) => {
     const servicioBD = await Service.findById(servicio);
     if (!servicioBD) return res.status(404).json({ mensaje: 'Servicio no encontrado' });
 
+    // El premio solo cubre cortes sencillos, nunca paquetes ni tratamientos
+    if (esPremio && req.user.rol !== 'barbero' && !servicioBD.aplicaPremio) {
+      return res.status(400).json({
+        mensaje: 'El premio de lealtad solo aplica en Corte de Cabello o Corte de Niño.'
+      });
+    }
+
     const duracion = servicioBD.duracionMinutos || 30;
     const finCita = new Date(citaFecha.getTime() + duracion * 60000);
 
