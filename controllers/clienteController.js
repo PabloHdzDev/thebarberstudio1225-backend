@@ -1,8 +1,22 @@
+const crypto = require('crypto');
 const User = require('../models/User');
 const Appointment = require('../models/Appointment');
 
 const META_VISITAS_PREMIO = 5;
 const LIMITE_DIRECTORIO = 12;
+
+// Sin I, O, l, o, 0 ni 1: la contraseña se dicta por WhatsApp o por teléfono
+// y esos caracteres se confunden entre sí.
+const ALFABETO_SEGURO = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+
+const generarPasswordTemporal = (largo = 10) => {
+  const bytes = crypto.randomBytes(largo);
+  let salida = '';
+  for (let i = 0; i < largo; i++) {
+    salida += ALFABETO_SEGURO[bytes[i] % ALFABETO_SEGURO.length];
+  }
+  return salida;
+};
 
 exports.obtenerDirectorio = async (req, res) => {
   try {
@@ -54,6 +68,9 @@ exports.accionAdmin = async (req, res) => {
     if (!usuario) return res.status(404).json({ mensaje: 'Usuario no encontrado' });
     if (usuario.rol === 'barbero') return res.status(403).json({ mensaje: 'No puedes modificar al barbero' });
 
+    // Se devuelve solo cuando se genera una contraseña temporal, una única vez
+    let passwordTemporal = null;
+
     if (accion === 'bloquear') {
       usuario.activo = false;
     } else if (accion === 'desbloquear') {
@@ -61,12 +78,23 @@ exports.accionAdmin = async (req, res) => {
     } else if (accion === 'resetear_contador') {
       usuario.contadorVisitas = 0;
       usuario.premioPendiente = false;
+    } else if (accion === 'generar_password') {
+      passwordTemporal = generarPasswordTemporal();
+      // El hook pre('save') del modelo la encripta; en la BD nunca queda en claro
+      usuario.password = passwordTemporal;
+      // Cualquier enlace de recuperación pendiente deja de servir
+      usuario.resetTokenHash = null;
+      usuario.resetTokenExpira = null;
     } else {
       return res.status(400).json({ mensaje: 'Acción no reconocida' });
     }
 
     await usuario.save();
-    res.json({ mensaje: 'Hecho', usuario: usuario.toObject({ virtuals: true }) });
+    res.json({
+      mensaje: 'Hecho',
+      usuario: usuario.toObject({ virtuals: true }),
+      passwordTemporal,
+    });
   } catch (error) {
     console.error('Error en acción admin:', error);
     res.status(500).json({ mensaje: 'Error al ejecutar la acción' });

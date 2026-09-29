@@ -6,8 +6,8 @@ const crypto = require('crypto');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// El enlace de recuperación vive 1 hora
-const VIGENCIA_RESET_MS = 60 * 60 * 1000;
+// El enlace de recuperación vive 24 horas
+const VIGENCIA_RESET_MS = 24 * 60 * 60 * 1000;
 
 const hashearToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
@@ -174,7 +174,7 @@ exports.solicitarReset = async (req, res) => {
     const enlace = `${baseUrl}/restablecer/${token}`;
 
     const textoWhats = encodeURIComponent(
-      `Hola ${usuario.nombre}, aquí puedes crear tu nueva contraseña de The Barber Studio 1225: ${enlace}\n\nEl enlace vence en 1 hora.`
+      `Hola ${usuario.nombre}, aquí puedes crear tu nueva contraseña de The Barber Studio 1225: ${enlace}\n\nEl enlace vence en 24 horas.`
     );
     const enlaceWhats = `https://wa.me/${usuario.whatsapp}?text=${textoWhats}`;
 
@@ -200,7 +200,7 @@ exports.solicitarReset = async (req, res) => {
             <p style="font-size: 12px; word-break: break-all; background:#f5f5f5; padding:10px; border-radius:6px;">${enlace}</p>
             <hr style="border: 1px solid #eee; margin: 20px 0;" />
             <p style="font-size: 11px; color: #888;">
-              El enlace vence en 1 hora y solo se puede usar una vez. Si no reconoces esta solicitud, ignora este correo: sin el enlace no se puede cambiar nada.
+              El enlace vence en 24 horas y solo se puede usar una vez. Si no reconoces esta solicitud, ignora este correo: sin el enlace no se puede cambiar nada.
             </p>
           </div>
         `
