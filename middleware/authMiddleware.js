@@ -9,16 +9,27 @@ const protegerRuta = async (req, res, next) => {
     try {
       token = req.headers.authorization.split(' ')[1];
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.user = await User.findById(decoded.id).select('-password');
-      next(); 
+      const usuario = await User.findById(decoded.id).select('-password');
+
+      // La cuenta pudo borrarse después de emitirse el token
+      if (!usuario) {
+        return res.status(401).json({ mensaje: 'No autorizado, la cuenta ya no existe' });
+      }
+
+      // Bloquear a un cliente debe cortarle la sesión al instante, no esperar
+      // a que caduque su token
+      if (usuario.activo === false) {
+        return res.status(401).json({ mensaje: 'Tu cuenta ha sido suspendida. Contacta a la barbería.' });
+      }
+
+      req.user = usuario;
+      return next();
     } catch (error) {
-      res.status(401).json({ mensaje: 'No autorizado, token fallido' });
+      return res.status(401).json({ mensaje: 'No autorizado, token fallido' });
     }
   }
 
-  if (!token) {
-    res.status(401).json({ mensaje: 'No autorizado, no hay token' });
-  }
+  return res.status(401).json({ mensaje: 'No autorizado, no hay token' });
 };
 
 // 👇 NUEVO CANDADO: Solo deja pasar si el rol es 'barbero'
