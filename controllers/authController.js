@@ -85,7 +85,9 @@ exports.obtenerUsuarios = async (req, res) => {
   try {
     // Buscamos todos los usuarios, pero EXCLUIMOS la contraseña por seguridad
     const usuarios = await User.find().select('-password');
-    res.json(usuarios);
+    // Con los virtuales viaja el nivel de fidelidad, que el panel usa para
+    // mostrar la insignia al elegir cliente en una cita
+    res.json(usuarios.map(u => u.toObject({ virtuals: true })));
   } catch (error) {
     console.error("Error al obtener usuarios:", error);
     res.status(500).json({ mensaje: 'Error al obtener la lista de clientes' });
