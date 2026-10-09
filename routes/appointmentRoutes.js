@@ -4,6 +4,7 @@ const appointmentController = require('../controllers/appointmentController');
 const { protegerRuta, soloBarbero } = require('../middleware/authMiddleware');
 
 router.get('/', protegerRuta, appointmentController.obtenerCitas);
+router.get('/listado', protegerRuta, soloBarbero, appointmentController.obtenerCitasPaginadas);
 router.post('/sincronizar', protegerRuta, soloBarbero, appointmentController.sincronizarHistorial);
 router.post('/', protegerRuta, appointmentController.crearCita);
 router.put('/:id', protegerRuta, appointmentController.actualizarCita);

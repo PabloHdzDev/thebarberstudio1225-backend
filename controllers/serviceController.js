@@ -1,4 +1,5 @@
 const Service = require('../models/Service');
+const { paginar } = require('../utils/paginacion');
 
 exports.crearServicio = async (req, res) => {
   try {
@@ -37,14 +38,31 @@ exports.crearServicio = async (req, res) => {
 // Obtener todos los servicios
 exports.obtenerServicios = async (req, res) => {
   try {
-    let filtro = { activo: true };
-    if (req.query.admin === 'true') {
-      filtro = {}; 
+    const { admin, pagina, buscar, limite, estado } = req.query;
+    const esAdmin = admin === 'true';
+
+    let filtro = esAdmin ? {} : { activo: true };
+    // En el panel se puede filtrar por visibles u ocultos
+    if (esAdmin && estado === 'visibles') filtro.activo = { $ne: false };
+    if (esAdmin && estado === 'ocultos') filtro.activo = false;
+
+    // La paginación es opcional: sin el parámetro "pagina" responde el arreglo
+    // completo, que es lo que espera el sitio público.
+    if (!pagina && !buscar) {
+      const servicios = await Service.find(filtro).sort({ orden: 1 });
+      return res.status(200).json(servicios);
     }
 
-    const servicios = await Service.find(filtro).sort({ orden: 1 });
-    res.status(200).json(servicios);
+    const resultado = await paginar(Service, {
+      pagina,
+      limite,
+      filtro,
+      buscar,
+      campos: ['nombre', 'descripcion'],
+      orden: { orden: 1 },
+    });
 
+    res.status(200).json(resultado);
   } catch (error) {
     console.error(error);
     res.status(500).json({ mensaje: 'Error al obtener los servicios' });

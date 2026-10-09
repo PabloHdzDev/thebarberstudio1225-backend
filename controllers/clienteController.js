@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const User = require('../models/User');
 const Appointment = require('../models/Appointment');
+const { paginar } = require('../utils/paginacion');
 
 const META_VISITAS_PREMIO = 5;
 const LIMITE_DIRECTORIO = 12;
@@ -18,42 +19,46 @@ const generarPasswordTemporal = (largo = 10) => {
   return salida;
 };
 
+const ORDEN_DIRECTORIO = {
+  nombre:       { nombre: 1 },
+  totalVisitas: { totalVisitas: -1 },
+  totalGastado: { totalGastado: -1 },
+  ultimaVisita: { ultimaVisita: -1 },
+  recientes:    { createdAt: -1 },
+};
+
+// Filtros rápidos del directorio, además de la búsqueda por texto
+const FILTRO_DIRECTORIO = {
+  todos:      {},
+  conPremio:  { premioPendiente: true },
+  bloqueados: { activo: false },
+  inactivos:  { ultimaVisita: { $lt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000), $ne: null } },
+  nuevos:     { createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
+};
+
 exports.obtenerDirectorio = async (req, res) => {
   try {
-    const { pagina = 1, buscar = '', orden = 'nombre' } = req.query;
-    const skip = (parseInt(pagina) - 1) * LIMITE_DIRECTORIO;
+    const { pagina, limite, buscar, orden = 'nombre', filtro = 'todos' } = req.query;
 
-    const filtro = { rol: 'cliente' };
-    if (buscar.trim()) {
-      filtro.$or = [
-        { nombre: { $regex: buscar.trim(), $options: 'i' } },
-        { email: { $regex: buscar.trim(), $options: 'i' } },
-        { whatsapp: { $regex: buscar.trim(), $options: 'i' } }
-      ];
-    }
-
-    const ordenMap = {
-      nombre:       { nombre: 1 },
-      totalVisitas: { totalVisitas: -1 },
-      totalGastado: { totalGastado: -1 },
-      ultimaVisita: { ultimaVisita: -1 },
-      recientes:    { createdAt: -1 }
-    };
-
-    const [clientes, total] = await Promise.all([
-      User.find(filtro)
-        .sort(ordenMap[orden] || { nombre: 1 })
-        .skip(skip)
-        .limit(LIMITE_DIRECTORIO)
-        .select('-password'),
-      User.countDocuments(filtro)
-    ]);
+    const resultado = await paginar(User, {
+      pagina,
+      limite: limite || LIMITE_DIRECTORIO,
+      filtro: { rol: 'cliente', ...(FILTRO_DIRECTORIO[filtro] || {}) },
+      buscar,
+      campos: ['nombre', 'email', 'whatsapp'],
+      orden: ORDEN_DIRECTORIO[orden] || ORDEN_DIRECTORIO.nombre,
+      seleccion: '-password',
+      virtuales: true,
+    });
 
     res.json({
-      clientes: clientes.map(c => c.toObject({ virtuals: true })),
-      totalPaginas: Math.ceil(total / LIMITE_DIRECTORIO),
-      paginaActual: parseInt(pagina),
-      total
+      datos: resultado.datos,
+      total: resultado.total,
+      pagina: resultado.pagina,
+      totalPaginas: resultado.totalPaginas,
+      // Se conservan los nombres anteriores para no romper lo que ya consume esto
+      clientes: resultado.datos,
+      paginaActual: resultado.pagina,
     });
   } catch (error) {
     console.error('Error en directorio:', error);

@@ -1,4 +1,5 @@
 const Product = require('../models/Product');
+const { paginar } = require('../utils/paginacion');
 
 // Crear Producto
 exports.crearProducto = async (req, res) => {
@@ -29,13 +30,31 @@ exports.crearProducto = async (req, res) => {
 // Obtener todos los productos
 exports.obtenerProductos = async (req, res) => {
   try {
-    let filtro = { activo: true };
-    if (req.query.admin === 'true') {
-      filtro = {}; 
+    const { admin, pagina, buscar, limite, estado } = req.query;
+    const esAdmin = admin === 'true';
+
+    let filtro = esAdmin ? {} : { activo: true };
+    if (esAdmin && estado === 'visibles') filtro.activo = { $ne: false };
+    if (esAdmin && estado === 'ocultos') filtro.activo = false;
+    if (esAdmin && estado === 'sinStock') filtro.stock = { $lte: 0 };
+
+    // Igual que en servicios: sin "pagina" ni "buscar" responde el arreglo
+    // completo, para no romper la página pública.
+    if (!pagina && !buscar) {
+      const productos = await Product.find(filtro).sort({ orden: 1 });
+      return res.status(200).json(productos);
     }
 
-    const productos = await Product.find(filtro).sort({ orden: 1 });
-    res.status(200).json(productos);
+    const resultado = await paginar(Product, {
+      pagina,
+      limite,
+      filtro,
+      buscar,
+      campos: ['nombre', 'descripcion'],
+      orden: { orden: 1 },
+    });
+
+    res.status(200).json(resultado);
   } catch (error) {
     console.error(error);
     res.status(500).json({ mensaje: 'Error al obtener los productos' });

@@ -2,6 +2,7 @@ const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
 const User = require('../models/User');
 const calendar = require('../config/googleCalendar');
+const { paginar, construirRegex } = require('../utils/paginacion');
 const socket = require('../socket/socket');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -465,5 +466,105 @@ exports.consultarDisponibilidad = async (req, res) => {
   } catch (error) {
     console.error('Error al consultar disponibilidad:', error);
     res.status(500).json({ mensaje: 'Error al consultar Google Calendar' });
+  }
+};
+
+// Listado paginado para el panel del barbero.
+// Separa próximas de pasadas porque el historial crece sin límite y es el que
+// de verdad necesita paginarse; las próximas son pocas por naturaleza.
+exports.obtenerCitasPaginadas = async (req, res) => {
+  try {
+    await procesarCitasPasadas();
+
+    const { pagina = 1, limite, buscar = '', filtro = 'proximas', estado } = req.query;
+    const ahora = new Date();
+    const esHistorial = filtro === 'pasadas';
+
+    const consulta = {
+      fechaHora: esHistorial ? { $lt: ahora } : { $gte: ahora },
+    };
+    if (estado && estado !== 'todos') consulta.estado = estado;
+
+    // Buscar por nombre de cliente o de servicio obliga a resolver sus ids
+    // antes, porque viven en otras colecciones
+    const texto = String(buscar).trim();
+    if (texto) {
+      const regex = construirRegex(texto);
+      const [clientes, servicios] = await Promise.all([
+        User.find({ nombre: regex }).select('_id').lean(),
+        Service.find({ nombre: regex }).select('_id').lean(),
+      ]);
+
+      consulta.$or = [
+        { nombreInvitado: regex },
+        { notas: regex },
+        { cliente: { $in: clientes.map((c) => c._id) } },
+        { servicio: { $in: servicios.map((s) => s._id) } },
+      ];
+    }
+
+    const resultado = await paginar(Appointment, {
+      pagina,
+      limite,
+      filtro: consulta,
+      // Historial de lo más reciente hacia atrás; próximas, lo más cercano primero
+      orden: { fechaHora: esHistorial ? -1 : 1 },
+      poblar: [
+        { path: 'servicio', select: 'nombre precio duracionMinutos' },
+        { path: 'cliente', select: 'nombre whatsapp email' },
+      ],
+    });
+
+    let externas = [];
+    // Los eventos creados directo en Google Calendar sólo importan en la agenda
+    // próxima; se añaden en la primera página para no descuadrar el conteo.
+    if (!esHistorial && resultado.pagina === 1 && !texto) {
+      try {
+        const googleRes = await calendar.events.list({
+          calendarId: ID_CALENDARIO,
+          timeMin: ahora.toISOString(),
+          singleEvents: true,
+          orderBy: 'startTime',
+          maxResults: 20,
+        });
+
+        const eventos = googleRes.data.items || [];
+        const guardadas = await Appointment.find({ googleEventId: { $ne: null } })
+          .select('googleEventId')
+          .lean();
+        const ids = new Set(guardadas.map((c) => c.googleEventId));
+
+        externas = eventos
+          .filter((e) => !ids.has(e.id))
+          .map((evento) => ({
+            _id: evento.id,
+            fechaHora: evento.start.dateTime || evento.start.date,
+            nombreInvitado: evento.summary || 'Bloqueo de Google',
+            cliente: null,
+            servicio: { nombre: 'Agendado en Google Calendar' },
+            notas: evento.description || 'Creado directamente desde la app de Google.',
+            esExterno: true,
+          }));
+      } catch (googleError) {
+        // Que falle Google no debe tumbar la agenda del barbero
+        console.error('No se pudieron leer eventos externos:', googleError.message);
+      }
+    }
+
+    const citas = [...externas, ...resultado.datos].sort(
+      (a, b) => (esHistorial ? new Date(b.fechaHora) - new Date(a.fechaHora)
+                             : new Date(a.fechaHora) - new Date(b.fechaHora))
+    );
+
+    res.json({
+      datos: citas,
+      total: resultado.total,
+      pagina: resultado.pagina,
+      totalPaginas: resultado.totalPaginas,
+      externas: externas.length,
+    });
+  } catch (error) {
+    console.error('Error al obtener citas paginadas:', error);
+    res.status(500).json({ mensaje: 'Error al obtener las citas' });
   }
 };
