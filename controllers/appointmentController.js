@@ -10,6 +10,90 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const ID_CALENDARIO = process.env.ID_CALENDARIO;
 const META_VISITAS_PREMIO = 5;
 
+// Las descripciones de Google vienen en HTML. El panel las muestra como texto,
+// nunca como HTML, así que aquí se quitan las etiquetas.
+const textoPlano = (html) => String(html || '')
+  .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<\/(p|div|li)>/gi, '\n')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&nbsp;/g, ' ')
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/&amp;/g, '&')
+  .replace(/[ \t]+/g, ' ')
+  .replace(/\n\s*\n+/g, '\n')
+  .trim();
+
+// Lo que el cliente llenó al reservar en la página de citas de Google. La
+// descripción trae "<b>Programada por</b>" con nombre, correo y teléfono, y una
+// sección por pregunta ("<b>Servicio</b>", por ejemplo). Después sigue el texto
+// fijo de la página de reservas, que es igual en todas y se descarta.
+const leerReservaGoogle = (descripcion) => {
+  const reserva = { nombre: '', email: '', telefono: '', respuestas: [] };
+
+  for (const seccion of String(descripcion || '').split(/<br\s*\/?>/i)) {
+    const campo = seccion.trim().match(/^<b>([^<]+)<\/b>([\s\S]*)$/i);
+    if (!campo) break;
+
+    const etiqueta = textoPlano(campo[1]);
+    const lineas = textoPlano(campo[2]).split('\n').map((l) => l.trim()).filter(Boolean);
+    const correo = lineas.find((l) => l.includes('@'));
+
+    if (correo) {
+      reserva.email = correo;
+      reserva.telefono = lineas.find((l) => /^\+?[\d\s()-]{7,}$/.test(l)) || '';
+      reserva.nombre = lineas.find((l) => l !== correo && l !== reserva.telefono) || '';
+    } else if (lineas.length) {
+      reserva.respuestas.push({ etiqueta, valor: lineas.join(' ') });
+    }
+  }
+
+  return reserva;
+};
+
+const recortar = (texto, max) => (texto.length > max ? `${texto.slice(0, max - 1)}…` : texto);
+
+// Convierte un evento de Google Calendar al formato de cita del panel.
+// Las reservas hechas desde la página de citas de Google llegan tituladas
+// "Agenda Barbería 💈 (Nombre del cliente)": se rescata el nombre para que el
+// panel muestre a la persona y no el nombre de la agenda.
+const formatearEventoGoogle = (evento) => {
+  const desdeAgenda = Boolean(evento.extendedProperties?.shared?.['goo.createdByAvailId']);
+  const titulo = (evento.summary || '').trim();
+  const entreParentesis = titulo.match(/\(([^)]+)\)\s*$/);
+  const reserva = desdeAgenda ? leerReservaGoogle(evento.description) : null;
+  const pedido = reserva?.respuestas.find((r) => /servicio/i.test(r.etiqueta));
+  const otrasRespuestas = reserva ? reserva.respuestas.filter((r) => r !== pedido) : [];
+
+  const nombre = ((desdeAgenda && entreParentesis?.[1]) || reserva?.nombre || titulo)
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const inicio = new Date(evento.start.dateTime || evento.start.date);
+  const fin = new Date(evento.end?.dateTime || evento.end?.date || inicio);
+
+  let nombreServicio = desdeAgenda ? 'Reservada en tu agenda de Google' : 'Evento de Google Calendar';
+  if (pedido?.valor) nombreServicio = recortar(pedido.valor, 80);
+
+  return {
+    _id: evento.id,
+    fechaHora: inicio,
+    fin,
+    duracionMinutos: Math.max(Math.round((fin - inicio) / 60000), 15),
+    nombreInvitado: nombre || 'Bloqueo de Google',
+    cliente: null,
+    servicio: { nombre: nombreServicio },
+    notas: desdeAgenda
+      ? otrasRespuestas.map((r) => `${r.etiqueta}: ${r.valor}`).join('\n')
+      : recortar(textoPlano(evento.description), 500),
+    contacto: reserva ? { telefono: reserva.telefono, email: reserva.email } : null,
+    esExterno: true,
+    origen: desdeAgenda ? 'agenda-google' : 'google',
+  };
+};
+
 exports.crearCita = async (req, res) => {
   try {
     const { servicio, fechaHora, notas, cliente, nombreInvitado, esPremio } = req.body;
@@ -157,6 +241,12 @@ exports.actualizarCita = async (req, res) => {
     const citaPrevia = await Appointment.findById(id).populate('servicio cliente');
     if (!citaPrevia) return res.status(404).json({ mensaje: 'Cita no encontrada' });
 
+    // Un cliente sólo puede mover sus propias citas
+    const esSuya = citaPrevia.cliente && String(citaPrevia.cliente._id) === String(req.user._id);
+    if (req.user.rol !== 'barbero' && !esSuya) {
+      return res.status(403).json({ mensaje: 'No puedes modificar esta cita.' });
+    }
+
     const ahora = new Date();
     const tiempoCitaOriginal = new Date(citaPrevia.fechaHora);
     const diferenciaHoras = (tiempoCitaOriginal - ahora) / (1000 * 60 * 60);
@@ -248,6 +338,10 @@ exports.eliminarCita = async (req, res) => {
     const esIdMongo = /^[0-9a-fA-F]{24}$/.test(id);
 
     if (!esIdMongo) {
+      // Los eventos sueltos de Google Calendar sólo los toca el barbero
+      if (req.user.rol !== 'barbero') {
+        return res.status(403).json({ mensaje: 'No puedes eliminar este evento.' });
+      }
       try {
         await calendar.events.delete({
           calendarId: ID_CALENDARIO,
@@ -263,6 +357,12 @@ exports.eliminarCita = async (req, res) => {
 
     const cita = await Appointment.findById(id).populate('servicio cliente');
     if (!cita) return res.status(404).json({ mensaje: 'Cita no encontrada' });
+
+    // Un cliente sólo puede cancelar sus propias citas
+    const esSuya = cita.cliente && String(cita.cliente._id) === String(req.user._id);
+    if (req.user.rol !== 'barbero' && !esSuya) {
+      return res.status(403).json({ mensaje: 'No puedes cancelar esta cita.' });
+    }
 
     const ahora = new Date();
     const diferenciaHoras = (cita.fechaHora - ahora) / (1000 * 60 * 60);
@@ -411,15 +511,7 @@ exports.obtenerCitas = async (req, res) => {
     const idsGuardados = citasBD.map(c => c.googleEventId).filter(Boolean);
     const eventosExternos = eventosGoogle.filter(evento => !idsGuardados.includes(evento.id));
 
-    const citasExternasFormateadas = eventosExternos.map(evento => ({
-      _id: evento.id,
-      fechaHora: evento.start.dateTime || evento.start.date,
-      nombreInvitado: evento.summary || 'Bloqueo de Google',
-      cliente: null,
-      servicio: { nombre: 'Agendado en Google Calendar' },
-      notas: evento.description || 'Creado directamente desde la app de Google.',
-      esExterno: true
-    }));
+    const citasExternasFormateadas = eventosExternos.map(formatearEventoGoogle);
 
     const todasLasCitas = [...citasBD, ...citasExternasFormateadas];
     todasLasCitas.sort((a, b) => new Date(a.fechaHora) - new Date(b.fechaHora));
@@ -536,15 +628,7 @@ exports.obtenerCitasPaginadas = async (req, res) => {
 
         externas = eventos
           .filter((e) => !ids.has(e.id))
-          .map((evento) => ({
-            _id: evento.id,
-            fechaHora: evento.start.dateTime || evento.start.date,
-            nombreInvitado: evento.summary || 'Bloqueo de Google',
-            cliente: null,
-            servicio: { nombre: 'Agendado en Google Calendar' },
-            notas: evento.description || 'Creado directamente desde la app de Google.',
-            esExterno: true,
-          }));
+          .map(formatearEventoGoogle);
       } catch (googleError) {
         // Que falle Google no debe tumbar la agenda del barbero
         console.error('No se pudieron leer eventos externos:', googleError.message);
@@ -565,6 +649,79 @@ exports.obtenerCitasPaginadas = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener citas paginadas:', error);
+    res.status(500).json({ mensaje: 'Error al obtener las citas' });
+  }
+};
+
+// Citas de un rango de fechas, para la vista de calendario del panel.
+// Devuelve inicio y fin ya calculados con la duración real del servicio, para
+// que el calendario dibuje cada bloque del alto que le corresponde.
+const RANGO_MAXIMO_DIAS = 42;
+
+exports.obtenerCitasRango = async (req, res) => {
+  try {
+    const { desde, hasta } = req.query;
+    const formato = /^\d{4}-\d{2}-\d{2}$/;
+
+    if (!formato.test(desde || '') || !formato.test(hasta || '')) {
+      return res.status(400).json({ mensaje: 'Usa fechas con formato AAAA-MM-DD en "desde" y "hasta".' });
+    }
+
+    const inicio = new Date(`${desde}T00:00:00-06:00`);
+    const fin = new Date(`${hasta}T23:59:59-06:00`);
+
+    if (fin < inicio) {
+      return res.status(400).json({ mensaje: 'La fecha final no puede ser anterior a la inicial.' });
+    }
+    // Tope de seis semanas: nadie necesita más en una sola vista y evita
+    // consultas desproporcionadas
+    if ((fin - inicio) / 86400000 > RANGO_MAXIMO_DIAS) {
+      return res.status(400).json({ mensaje: `El rango no puede superar ${RANGO_MAXIMO_DIAS} días.` });
+    }
+
+    await procesarCitasPasadas();
+
+    const citasBD = await Appointment.find({ fechaHora: { $gte: inicio, $lte: fin } })
+      .sort({ fechaHora: 1 })
+      .populate('servicio', 'nombre precio duracionMinutos')
+      .populate('cliente', 'nombre whatsapp email')
+      .lean();
+
+    const citas = citasBD.map((c) => {
+      const duracion = c.servicio?.duracionMinutos || 30;
+      return {
+        ...c,
+        duracionMinutos: duracion,
+        fin: new Date(new Date(c.fechaHora).getTime() + duracion * 60000),
+      };
+    });
+
+    // Eventos creados directo en Google Calendar: ocupan tiempo aunque no
+    // vivan en la base, así que también se dibujan
+    let externas = [];
+    try {
+      const googleRes = await calendar.events.list({
+        calendarId: ID_CALENDARIO,
+        timeMin: inicio.toISOString(),
+        timeMax: fin.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+        maxResults: 250,
+      });
+
+      const propios = new Set(citasBD.map((c) => c.googleEventId).filter(Boolean));
+
+      externas = (googleRes.data.items || [])
+        // Los eventos de día completo no tienen hora: no caben en la rejilla
+        .filter((e) => !propios.has(e.id) && e.start?.dateTime && e.end?.dateTime)
+        .map(formatearEventoGoogle);
+    } catch (googleError) {
+      console.error('No se pudieron leer eventos externos:', googleError.message);
+    }
+
+    res.json({ citas: [...citas, ...externas] });
+  } catch (error) {
+    console.error('Error al obtener citas por rango:', error);
     res.status(500).json({ mensaje: 'Error al obtener las citas' });
   }
 };

@@ -11,6 +11,12 @@ const VIGENCIA_RESET_MS = 24 * 60 * 60 * 1000;
 
 const hashearToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
+// wa.me necesita la lada del país y los números se guardan a 10 dígitos
+const numeroWhatsApp = (numero) => {
+  const digitos = String(numero || '').replace(/\D/g, '');
+  return digitos.length === 10 ? `52${digitos}` : digitos;
+};
+
 // Función auxiliar para generar el Token
 const generarToken = (id, rol) => {
   return jwt.sign({ id, rol }, process.env.JWT_SECRET, {
@@ -178,7 +184,7 @@ exports.solicitarReset = async (req, res) => {
     const textoWhats = encodeURIComponent(
       `Hola ${usuario.nombre}, aquí puedes crear tu nueva contraseña de The Barber Studio 1225: ${enlace}\n\nEl enlace vence en 24 horas.`
     );
-    const enlaceWhats = `https://wa.me/${usuario.whatsapp}?text=${textoWhats}`;
+    const enlaceWhats = `https://wa.me/${numeroWhatsApp(usuario.whatsapp)}?text=${textoWhats}`;
 
     try {
       await resend.emails.send({
