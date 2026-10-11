@@ -4,8 +4,7 @@ const User = require('../models/User');
 const calendar = require('../config/googleCalendar');
 const { paginar, construirRegex } = require('../utils/paginacion');
 const socket = require('../socket/socket');
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
+const { enviarCorreo, correoDelBarbero } = require('../config/mailer');
 
 const ID_CALENDARIO = process.env.ID_CALENDARIO;
 const META_VISITAS_PREMIO = 5;
@@ -192,15 +191,14 @@ exports.crearCita = async (req, res) => {
       await User.findByIdAndUpdate(clienteId, { premioPendiente: false });
     }
 
-    // --- ENVIAR NOTIFICACIÓN POR CORREO (AL BARBERO) CON RESEND ---
+    // --- ENVIAR NOTIFICACIÓN POR CORREO (AL BARBERO) CON GMAIL ---
     const fechaLegible = new Date(fechaHora).toLocaleString('es-MX', {
       timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
     });
 
     try {
-      await resend.emails.send({
-        from: 'onboarding@resend.dev',
-        to: process.env.EMAIL_USER,
+      await enviarCorreo({
+        to: correoDelBarbero(),
         subject: `✅ NUEVA CITA: ${nombreParaGoogle}${premioTexto}`,
         html: `
           <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-w: 600px;">
@@ -217,7 +215,7 @@ exports.crearCita = async (req, res) => {
         `
       });
     } catch (emailError) {
-      console.error("⚠️ Error enviando correo de nueva cita:", emailError);
+      console.error("⚠️ Error enviando correo de nueva cita:", emailError.message);
     }
 
     const citaPoblada = await Appointment.findById(nuevaCita._id)
@@ -304,9 +302,8 @@ exports.actualizarCita = async (req, res) => {
     const fechaNuevaLegible = new Date(nuevaFecha).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', weekday: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     try {
-      await resend.emails.send({
-        from: 'onboarding@resend.dev',
-        to: process.env.EMAIL_USER,
+      await enviarCorreo({
+        to: correoDelBarbero(),
         subject: `🔄 REPROGRAMACIÓN: ${nombreParaGoogle}`,
         html: `
           <div style="font-family: sans-serif; border: 2px solid #2196F3; padding: 20px; border-radius: 10px; max-w: 600px;">
@@ -319,7 +316,7 @@ exports.actualizarCita = async (req, res) => {
         `
       });
     } catch (emailError) {
-      console.error("⚠️ Error enviando correo de reprogramación:", emailError);
+      console.error("⚠️ Error enviando correo de reprogramación:", emailError.message);
     }
 
     socket.getIo().emit('notificar_cita', citaActualizada);
@@ -389,9 +386,8 @@ exports.eliminarCita = async (req, res) => {
     });
 
     try {
-      await resend.emails.send({
-        from: 'onboarding@resend.dev',
-        to: process.env.EMAIL_USER,
+      await enviarCorreo({
+        to: correoDelBarbero(),
         subject: `❌ CITA CANCELADA: ${nombreParaGoogle}`,
         html: `
           <div style="font-family: sans-serif; border: 2px solid #F44336; padding: 20px; border-radius: 10px; max-w: 600px;">
@@ -403,7 +399,7 @@ exports.eliminarCita = async (req, res) => {
         `
       });
     } catch (emailError) {
-      console.error("⚠️ Error enviando correo de cancelación:", emailError);
+      console.error("⚠️ Error enviando correo de cancelación:", emailError.message);
     }
 
     await Appointment.findByIdAndDelete(req.params.id);

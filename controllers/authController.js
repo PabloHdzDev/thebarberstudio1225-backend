@@ -3,18 +3,66 @@ const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
+const { enviarCorreo } = require('../config/mailer');
+const { escaparRegex } = require('../utils/paginacion');
+const { saludoPara, correoConBoton } = require('../utils/correos');
 
-// El enlace de recuperación vive 24 horas
+// El enlace de recuperación vive 24 horas; el de confirmar el correo, 7 días
 const VIGENCIA_RESET_MS = 24 * 60 * 60 * 1000;
+const VIGENCIA_VERIFICACION_MS = 7 * 24 * 60 * 60 * 1000;
+// Tiempo mínimo entre dos correos con enlace para la misma cuenta
+const ESPERA_ENTRE_ENLACES_MS = 5 * 60 * 1000;
 
 const hashearToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
-// wa.me necesita la lada del país y los números se guardan a 10 dígitos
-const numeroWhatsApp = (numero) => {
-  const digitos = String(numero || '').replace(/\D/g, '');
-  return digitos.length === 10 ? `52${digitos}` : digitos;
+const normalizarCorreo = (correo) => String(correo || '').trim().toLowerCase();
+
+// Busca el correo sin importar mayúsculas: hay cuentas viejas guardadas con
+// mayúscula inicial, y así nadie se queda fuera por cómo lo teclea
+const filtroCorreo = (correo) => ({
+  email: new RegExp(`^${escaparRegex(normalizarCorreo(correo))}$`, 'i'),
+});
+
+const enlaceDelSitio = (ruta) => `${process.env.FRONTEND_URL || 'http://localhost:5173'}${ruta}`;
+
+// Enlace nuevo para confirmar el correo: el token viaja en el enlace y en la
+// base sólo queda su hash
+const nuevaVerificacion = () => {
+  const token = crypto.randomBytes(32).toString('hex');
+  return {
+    enlace: enlaceDelSitio(`/verificar-correo/${token}`),
+    campos: {
+      verificacionTokenHash: hashearToken(token),
+      verificacionExpira: new Date(Date.now() + VIGENCIA_VERIFICACION_MS),
+    },
+  };
+};
+
+const enviarCorreoVerificacion = (usuario, enlace) => {
+  const saludo = saludoPara(usuario.nombre);
+  return enviarCorreo({
+    to: usuario.email,
+    subject: 'Confirma tu correo · The Barber Studio 1225',
+    text: [
+      `${saludo}:`,
+      '',
+      'Gracias por registrarte en The Barber Studio 1225. Confirma que este correo es tuyo desde este enlace:',
+      enlace,
+      '',
+      'Así podremos enviarte el enlace para recuperar tu contraseña si algún día la olvidas.',
+      'El enlace vence en 7 días. Si no creaste esta cuenta, ignora este correo.',
+    ].join('\n'),
+    html: correoConBoton({
+      saludo,
+      parrafos: [
+        'Gracias por registrarte en The Barber Studio 1225.',
+        'Confirma que este correo es tuyo para que podamos enviarte el enlace de recuperación si algún día olvidas tu contraseña.',
+      ],
+      boton: 'Confirmar mi correo',
+      enlace,
+      nota: 'El enlace vence en 7 días. Si no creaste esta cuenta, ignora este correo.',
+    }),
+  });
 };
 
 // Función auxiliar para generar el Token
@@ -26,11 +74,13 @@ const generarToken = (id, rol) => {
 
 // 1. REGISTRAR USUARIO
 exports.registrarUsuario = async (req, res) => {
-  const { nombre, email, password, whatsapp } = req.body;
+  const { nombre, password } = req.body;
+  const email = normalizarCorreo(req.body.email);
+  const whatsapp = String(req.body.whatsapp || '').trim();
 
   try {
-    // 1. Revisar si el email ya existe
-    const emailExiste = await User.findOne({ email });
+    // 1. Revisar si el email ya existe (con o sin mayúsculas)
+    const emailExiste = await User.findOne(filtroCorreo(email));
     if (emailExiste) {
       return res.status(400).json({ mensaje: 'Este correo electrónico ya está registrado.' });
     }
@@ -41,8 +91,13 @@ exports.registrarUsuario = async (req, res) => {
       return res.status(400).json({ mensaje: 'Este número de WhatsApp ya está vinculado a otra cuenta.' });
     }
 
-    // 3. Si todo está limpio, crear el usuario
-    const usuario = await User.create({ nombre, email, password, whatsapp });
+    // 3. Si todo está limpio, crear el usuario con su enlace para confirmar el correo
+    const verificacion = nuevaVerificacion();
+    const usuario = await User.create({ nombre, email, password, whatsapp, ...verificacion.campos });
+
+    // El correo sale sin hacer esperar al registro. Si no llega, el cliente
+    // puede pedir otro desde "Mis citas".
+    enviarCorreoVerificacion(usuario, verificacion.enlace);
 
     res.status(201).json({
       _id: usuario._id,
@@ -58,15 +113,13 @@ exports.registrarUsuario = async (req, res) => {
 
 // 2. INICIAR SESIÓN (LOGIN)
 exports.iniciarSesion = async (req, res) => {
-const { identificador, password } = req.body;
+  const { password } = req.body;
+  const identificador = String(req.body.identificador || '').trim();
 
   try {
     // Buscamos al usuario que coincida con el email O con el whatsapp
     const usuario = await User.findOne({
-      $or: [
-        { email: identificador },
-        { whatsapp: identificador }
-      ]
+      $or: [filtroCorreo(identificador), { whatsapp: identificador }]
     });
 
     if (usuario && (await usuario.matchPassword(password))) {
@@ -147,8 +200,8 @@ exports.cambiarPassword = async (req, res) => {
   }
 };
 // ── RECUPERACIÓN DE CONTRASEÑA ──────────────────────────────────────────────
-// El cliente pide recuperar; al barbero le llega un aviso con un enlace de un
-// solo uso que él reenvía por WhatsApp. El cliente elige su propia contraseña.
+// El cliente pide recuperar y le llega a su correo un enlace de un solo uso
+// para elegir su nueva contraseña.
 
 exports.solicitarReset = async (req, res) => {
   try {
@@ -160,15 +213,22 @@ exports.solicitarReset = async (req, res) => {
 
     const busqueda = identificador.trim();
     const usuario = await User.findOne({
-      $or: [{ email: busqueda }, { whatsapp: busqueda }]
+      $or: [filtroCorreo(busqueda), { whatsapp: busqueda }]
     });
 
     // Respuesta idéntica exista o no la cuenta, para no revelar quién está registrado
     const respuestaGenerica = {
-      mensaje: 'Si la cuenta existe, la barbería recibirá tu solicitud y te enviará un enlace por WhatsApp para crear una contraseña nueva.'
+      mensaje: 'Si la cuenta existe, te enviamos un correo con un enlace para crear una contraseña nueva. Revisa también la carpeta de spam.'
     };
 
     if (!usuario || usuario.activo === false) {
+      return res.json(respuestaGenerica);
+    }
+
+    // Si la cuenta acaba de recibir un enlace, no se manda otro: así nadie puede
+    // llenar de correos la bandeja de un cliente escribiendo su número una y otra vez
+    const emitido = usuario.resetTokenExpira ? usuario.resetTokenExpira.getTime() - VIGENCIA_RESET_MS : 0;
+    if (Date.now() - emitido < ESPERA_ENTRE_ENLACES_MS) {
       return res.json(respuestaGenerica);
     }
 
@@ -178,44 +238,32 @@ exports.solicitarReset = async (req, res) => {
     usuario.resetTokenExpira = new Date(Date.now() + VIGENCIA_RESET_MS);
     await usuario.save();
 
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const enlace = `${baseUrl}/restablecer/${token}`;
+    const enlace = enlaceDelSitio(`/restablecer/${token}`);
+    const saludo = saludoPara(usuario.nombre);
 
-    const textoWhats = encodeURIComponent(
-      `Hola ${usuario.nombre}, aquí puedes crear tu nueva contraseña de The Barber Studio 1225: ${enlace}\n\nEl enlace vence en 24 horas.`
-    );
-    const enlaceWhats = `https://wa.me/${numeroWhatsApp(usuario.whatsapp)}?text=${textoWhats}`;
-
-    try {
-      await resend.emails.send({
-        from: 'onboarding@resend.dev',
-        to: process.env.EMAIL_USER,
-        subject: `🔑 Recuperación de contraseña: ${usuario.nombre}`,
-        html: `
-          <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-width: 600px;">
-            <h2 style="color: #d4af37; margin-top: 0;">Un cliente quiere recuperar su contraseña</h2>
-            <p><strong>Cliente:</strong> ${usuario.nombre}</p>
-            <p><strong>Correo:</strong> ${usuario.email}</p>
-            <p><strong>WhatsApp:</strong> ${usuario.whatsapp}</p>
-            <hr style="border: 1px solid #eee; margin: 20px 0;" />
-            <p style="margin-bottom: 18px;">Mándale este enlace para que cree su nueva contraseña:</p>
-            <p style="text-align: center; margin: 24px 0;">
-              <a href="${enlaceWhats}" style="background:#25D366;color:#fff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:bold;display:inline-block;">
-                Enviar por WhatsApp
-              </a>
-            </p>
-            <p style="font-size: 12px; color: #888;">O copia y pega el enlace manualmente:</p>
-            <p style="font-size: 12px; word-break: break-all; background:#f5f5f5; padding:10px; border-radius:6px;">${enlace}</p>
-            <hr style="border: 1px solid #eee; margin: 20px 0;" />
-            <p style="font-size: 11px; color: #888;">
-              El enlace vence en 24 horas y solo se puede usar una vez. Si no reconoces esta solicitud, ignora este correo: sin el enlace no se puede cambiar nada.
-            </p>
-          </div>
-        `
-      });
-    } catch (emailError) {
-      console.error('⚠️ Error enviando correo de recuperación:', emailError);
-    }
+    await enviarCorreo({
+      to: usuario.email,
+      subject: 'Crea tu nueva contraseña · The Barber Studio 1225',
+      text: [
+        `${saludo}:`,
+        '',
+        'Recibimos una solicitud para cambiar la contraseña de tu cuenta en The Barber Studio 1225. Crea una nueva desde este enlace:',
+        enlace,
+        '',
+        'El enlace vence en 24 horas y solo funciona una vez.',
+        'Si no pediste este cambio, ignora este correo: tu contraseña sigue igual.',
+      ].join('\n'),
+      html: correoConBoton({
+        saludo,
+        parrafos: [
+          'Recibimos una solicitud para cambiar la contraseña de tu cuenta.',
+          'Pulsa el botón para crear una nueva:',
+        ],
+        boton: 'Crear nueva contraseña',
+        enlace,
+        nota: 'El enlace vence en 24 horas y solo funciona una vez. Si no pediste este cambio, ignora este correo: tu contraseña sigue igual.',
+      }),
+    });
 
     res.json(respuestaGenerica);
   } catch (error) {
@@ -265,11 +313,79 @@ exports.restablecerPassword = async (req, res) => {
     // Se invalida el enlace para que no pueda reutilizarse
     usuario.resetTokenHash = null;
     usuario.resetTokenExpira = null;
+    // El enlace llegó a su correo y lo abrió: eso también confirma que es suyo
+    usuario.emailVerificado = true;
+    usuario.verificacionTokenHash = null;
+    usuario.verificacionExpira = null;
     await usuario.save();
 
     res.json({ mensaje: 'Contraseña actualizada. Ya puedes iniciar sesión.' });
   } catch (error) {
     console.error('Error al restablecer contraseña:', error);
     res.status(500).json({ mensaje: 'Error al restablecer la contraseña' });
+  }
+};
+
+// ── CONFIRMACIÓN DEL CORREO ─────────────────────────────────────────────────
+// Al registrarse le llega al cliente un enlace para confirmar su correo. No
+// bloquea nada: mientras no lo confirme, "Mis citas" le muestra un recordatorio.
+
+exports.verificarCorreo = async (req, res) => {
+  try {
+    const usuario = await User.findOne({
+      verificacionTokenHash: hashearToken(req.params.token),
+      verificacionExpira: { $gt: new Date() }
+    });
+
+    if (!usuario) {
+      return res.status(400).json({
+        mensaje: 'Este enlace ya se usó o venció. Si tu correo ya está confirmado, no tienes que hacer nada; si no, pide otro desde "Mis citas".'
+      });
+    }
+
+    usuario.emailVerificado = true;
+    usuario.verificacionTokenHash = null;
+    usuario.verificacionExpira = null;
+    await usuario.save();
+
+    res.json({ mensaje: 'Tu correo quedó confirmado. ¡Gracias!' });
+  } catch (error) {
+    console.error('Error al confirmar correo:', error);
+    res.status(500).json({ mensaje: 'Error al confirmar el correo' });
+  }
+};
+
+// El cliente con sesión iniciada pide otro enlace desde "Mis citas"
+exports.reenviarVerificacion = async (req, res) => {
+  try {
+    const usuario = await User.findById(req.user._id);
+    if (!usuario) return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+
+    if (usuario.emailVerificado) {
+      return res.json({ mensaje: 'Tu correo ya está confirmado.', verificado: true });
+    }
+
+    const emitido = usuario.verificacionExpira
+      ? usuario.verificacionExpira.getTime() - VIGENCIA_VERIFICACION_MS
+      : 0;
+    if (Date.now() - emitido < ESPERA_ENTRE_ENLACES_MS) {
+      return res.status(429).json({
+        mensaje: 'Ya te enviamos un enlace hace un momento. Revisa tu correo y la carpeta de spam.'
+      });
+    }
+
+    const verificacion = nuevaVerificacion();
+    Object.assign(usuario, verificacion.campos);
+    await usuario.save();
+
+    const { error } = await enviarCorreoVerificacion(usuario, verificacion.enlace);
+    if (error) {
+      return res.status(502).json({ mensaje: 'No pudimos enviar el correo. Intenta de nuevo en un rato.' });
+    }
+
+    res.json({ mensaje: `Te enviamos un enlace a ${usuario.email}.` });
+  } catch (error) {
+    console.error('Error al reenviar confirmación:', error);
+    res.status(500).json({ mensaje: 'Error al enviar el enlace' });
   }
 };

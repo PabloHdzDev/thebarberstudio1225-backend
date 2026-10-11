@@ -2,10 +2,12 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const UserSchema = new mongoose.Schema({
-  nombre: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
+  nombre: { type: String, required: true, trim: true },
+  // En minúsculas: el teclado del celular pone mayúscula al inicio y así se
+  // llegaron a duplicar cuentas ("Juan@..." y "juan@...")
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   password: { type: String, required: true },
-  whatsapp: { type: String, required: true, unique: true },
+  whatsapp: { type: String, required: true, unique: true, trim: true },
   rol: {
     type: String,
     enum: ['cliente', 'barbero', 'admin'],
@@ -27,9 +29,16 @@ const UserSchema = new mongoose.Schema({
   activo: { type: Boolean, default: true },
 
   // --- Recuperación de contraseña ---
-  // Se guarda solo el hash del token; el original viaja en el enlace y nunca se almacena
-  resetTokenHash: { type: String, default: null },
-  resetTokenExpira: { type: Date, default: null }
+  // Se guarda solo el hash del token; el original viaja en el enlace y nunca se
+  // almacena. "select: false" evita que el hash salga en las respuestas de la API.
+  resetTokenHash: { type: String, default: null, select: false },
+  resetTokenExpira: { type: Date, default: null },
+
+  // --- Confirmación del correo ---
+  // No bloquea nada: sólo muestra un recordatorio en "Mis citas" hasta confirmarlo
+  emailVerificado: { type: Boolean, default: false },
+  verificacionTokenHash: { type: String, default: null, select: false },
+  verificacionExpira: { type: Date, default: null }
 
 }, { timestamps: true });
 
