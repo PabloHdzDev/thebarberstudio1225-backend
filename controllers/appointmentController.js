@@ -7,7 +7,6 @@ const socket = require('../socket/socket');
 const { enviarCorreo, correoDelBarbero } = require('../config/mailer');
 
 const ID_CALENDARIO = process.env.ID_CALENDARIO;
-const META_VISITAS_PREMIO = 5;
 
 // Las descripciones de Google vienen en HTML. El panel las muestra como texto,
 // nunca como HTML, así que aquí se quitan las etiquetas.
@@ -95,7 +94,7 @@ const formatearEventoGoogle = (evento) => {
 
 exports.crearCita = async (req, res) => {
   try {
-    const { servicio, fechaHora, notas, cliente, nombreInvitado, esPremio } = req.body;
+    const { servicio, fechaHora, notas, cliente, nombreInvitado } = req.body;
     const citaFecha = new Date(fechaHora);
     const ahora = new Date();
 
@@ -107,23 +106,8 @@ exports.crearCita = async (req, res) => {
       });
     }
 
-    // --- VALIDACIÓN DE PREMIO (solo clientes, no barberos) ---
-    if (esPremio && req.user.rol !== 'barbero') {
-      // req.user viene del middleware con datos frescos de BD
-      if (!req.user.premioPendiente) {
-        return res.status(403).json({ mensaje: 'No tienes un premio disponible para canjear.' });
-      }
-    }
-
     const servicioBD = await Service.findById(servicio);
     if (!servicioBD) return res.status(404).json({ mensaje: 'Servicio no encontrado' });
-
-    // El premio solo cubre cortes sencillos, nunca paquetes ni tratamientos
-    if (esPremio && req.user.rol !== 'barbero' && !servicioBD.aplicaPremio) {
-      return res.status(400).json({
-        mensaje: 'El premio de lealtad solo aplica en Corte de Cabello o Corte de Niño.'
-      });
-    }
 
     const duracion = servicioBD.duracionMinutos || 30;
     const finCita = new Date(citaFecha.getTime() + duracion * 60000);
@@ -160,20 +144,16 @@ exports.crearCita = async (req, res) => {
       return res.status(400).json({ mensaje: 'Este horario ya está ocupado en el calendario.' });
     }
 
-    const premioTexto = esPremio && req.user.rol !== 'barbero' ? ' 🎁 PREMIO 50% OFF' : '';
-
     // Insertar en Google Calendar
     const googleRes = await calendar.events.insert({
       calendarId: ID_CALENDARIO,
       resource: {
-        summary: `💈 Corte: ${nombreParaGoogle}${premioTexto}`,
+        summary: `💈 Corte: ${nombreParaGoogle}`,
         description: `📱 WhatsApp: ${telefonoParaGoogle}\n✂️ Servicio: ${servicioBD.nombre}\n📝 Notas: ${notas || 'Ninguna'}`,
         start: { dateTime: citaFecha.toISOString(), timeZone: 'America/Mexico_City' },
         end: { dateTime: finCita.toISOString(), timeZone: 'America/Mexico_City' },
       }
     });
-
-    const citaEsPremio = Boolean(esPremio && req.user.rol !== 'barbero');
 
     // Guardar en MongoDB
     const nuevaCita = await Appointment.create({
@@ -183,13 +163,7 @@ exports.crearCita = async (req, res) => {
       fechaHora,
       notas,
       googleEventId: googleRes.data.id,
-      esPremio: citaEsPremio
     });
-
-    // Si es premio de cliente, limpiar el flag en el usuario
-    if (citaEsPremio && clienteId) {
-      await User.findByIdAndUpdate(clienteId, { premioPendiente: false });
-    }
 
     // --- ENVIAR NOTIFICACIÓN POR CORREO (AL BARBERO) CON GMAIL ---
     const fechaLegible = new Date(fechaHora).toLocaleString('es-MX', {
@@ -199,13 +173,12 @@ exports.crearCita = async (req, res) => {
     try {
       await enviarCorreo({
         to: correoDelBarbero(),
-        subject: `✅ NUEVA CITA: ${nombreParaGoogle}${premioTexto}`,
+        subject: `✅ NUEVA CITA: ${nombreParaGoogle}`,
         html: `
           <div style="font-family: sans-serif; border: 2px solid #d4af37; padding: 20px; border-radius: 10px; max-w: 600px;">
             <h2 style="color: #d4af37; margin-top: 0;">¡Tienes un nuevo turno agendado!</h2>
             <p><strong>Cliente:</strong> ${nombreParaGoogle}</p>
             <p><strong>Servicio:</strong> ${servicioBD.nombre} ($${servicioBD.precio})</p>
-            ${citaEsPremio ? '<p style="color:#d4af37;font-weight:bold;">🎁 CITA CON PREMIO 50% OFF</p>' : ''}
             <p><strong>Fecha y Hora:</strong> ${fechaLegible}</p>
             <p><strong>WhatsApp:</strong> ${telefonoParaGoogle}</p>
             <p><strong>Notas:</strong> ${notas || 'Sin notas adicionales'}</p>
@@ -426,17 +399,10 @@ const procesarCitasPasadas = async () => {
     if (cita.cliente) {
       const usuario = await User.findById(cita.cliente);
       if (usuario) {
-        usuario.contadorVisitas += 1;
         usuario.totalVisitas += 1;
-        const precio = cita.esPremio
-          ? Math.round((cita.servicio?.precio || 0) / 2)
-          : (cita.servicio?.precio || 0);
+        const precio = cita.servicio?.precio || 0;
         usuario.totalGastado += precio;
         usuario.ultimaVisita = cita.fechaHora;
-        if (usuario.contadorVisitas >= META_VISITAS_PREMIO) {
-          usuario.premioPendiente = true;
-          usuario.contadorVisitas = 0;
-        }
         await usuario.save();
       }
     }
@@ -460,18 +426,11 @@ exports.sincronizarHistorial = async (req, res) => {
       if (cita.cliente) {
         const usuario = await User.findById(cita.cliente);
         if (usuario) {
-          usuario.contadorVisitas += 1;
           usuario.totalVisitas += 1;
-          const precio = cita.esPremio
-            ? Math.round((cita.servicio?.precio || 0) / 2)
-            : (cita.servicio?.precio || 0);
+          const precio = cita.servicio?.precio || 0;
           usuario.totalGastado += precio;
           if (!usuario.ultimaVisita || cita.fechaHora > usuario.ultimaVisita) {
             usuario.ultimaVisita = cita.fechaHora;
-          }
-          if (usuario.contadorVisitas >= META_VISITAS_PREMIO) {
-            usuario.premioPendiente = true;
-            usuario.contadorVisitas = 0;
           }
           await usuario.save();
         }

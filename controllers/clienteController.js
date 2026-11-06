@@ -3,7 +3,6 @@ const User = require('../models/User');
 const Appointment = require('../models/Appointment');
 const { paginar } = require('../utils/paginacion');
 
-const META_VISITAS_PREMIO = 5;
 const LIMITE_DIRECTORIO = 12;
 
 // Sin I, O, l, o, 0 ni 1: la contraseña se dicta por WhatsApp o por teléfono
@@ -30,7 +29,6 @@ const ORDEN_DIRECTORIO = {
 // Filtros rápidos del directorio, además de la búsqueda por texto
 const FILTRO_DIRECTORIO = {
   todos:      {},
-  conPremio:  { premioPendiente: true },
   bloqueados: { activo: false },
   inactivos:  { ultimaVisita: { $lt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000), $ne: null } },
   nuevos:     { createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
@@ -80,9 +78,6 @@ exports.accionAdmin = async (req, res) => {
       usuario.activo = false;
     } else if (accion === 'desbloquear') {
       usuario.activo = true;
-    } else if (accion === 'resetear_contador') {
-      usuario.contadorVisitas = 0;
-      usuario.premioPendiente = false;
     } else if (accion === 'generar_password') {
       passwordTemporal = generarPasswordTemporal();
       // El hook pre('save') del modelo la encripta; en la BD nunca queda en claro
@@ -115,7 +110,6 @@ exports.obtenerEstadisticasClientes = async (req, res) => {
       clientesFrecuentes,
       clientesNuevos,
       clientesInactivos,
-      clientesConPremio,
       totalClientes,
       serviciosTop,
       resumenIngresos
@@ -138,10 +132,6 @@ exports.obtenerEstadisticasClientes = async (req, res) => {
         rol: 'cliente',
         ultimaVisita: { $lt: hace60dias, $ne: null }
       }).sort({ ultimaVisita: 1 }).limit(10).select('-password'),
-
-      // Clientes con premio sin canjear
-      User.find({ rol: 'cliente', premioPendiente: true })
-          .select('-password'),
 
       // Total de clientes registrados
       User.countDocuments({ rol: 'cliente' }),
@@ -194,22 +184,18 @@ exports.obtenerEstadisticasClientes = async (req, res) => {
 
     // Incluir el virtual "nivel" en la serialización
     const frecuentesConNivel = clientesFrecuentes.map(c => c.toObject({ virtuals: true }));
-    const premioConNivel = clientesConPremio.map(c => c.toObject({ virtuals: true }));
 
     res.json({
       resumen: {
         totalClientes,
-        clientesConPremio: clientesConPremio.length,
         clientesNuevosEsteMes: clientesNuevos.length,
         clientesInactivos: clientesInactivos.length,
         ingresosTotalesCompletadas: resumenIngresos[0]?.total || 0,
         citasCompletadas: resumenIngresos[0]?.cantidad || 0,
-        metaVisitas: META_VISITAS_PREMIO
       },
       clientesFrecuentes: frecuentesConNivel,
       clientesNuevos,
       clientesInactivos,
-      clientesConPremio: premioConNivel,
       serviciosTop
     });
 

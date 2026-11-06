@@ -15,16 +15,12 @@ const UserSchema = new mongoose.Schema({
   },
 
   // --- Sistema de fidelización ---
-  // Se incrementa en cada visita completada y se resetea al ganar un premio
-  contadorVisitas: { type: Number, default: 0 },
   // Contador histórico de todas las visitas, nunca se resetea
   totalVisitas: { type: Number, default: 0 },
   // Gasto acumulado en visitas completadas
   totalGastado: { type: Number, default: 0 },
   // Fecha de la última visita marcada como completada
   ultimaVisita: { type: Date, default: null },
-  // true cuando el cliente acumuló suficientes visitas y puede canjear su premio
-  premioPendiente: { type: Boolean, default: false },
   // false = cuenta bloqueada por el barbero
   activo: { type: Boolean, default: true },
 

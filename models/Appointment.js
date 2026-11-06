@@ -13,8 +13,6 @@ const appointmentSchema = new mongoose.Schema({
     enum: ['pendiente', 'completada', 'cancelada'],
     default: 'pendiente'
   },
-  // true si fue agendada canjeando un premio de lealtad
-  esPremio: { type: Boolean, default: false }
 });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);
