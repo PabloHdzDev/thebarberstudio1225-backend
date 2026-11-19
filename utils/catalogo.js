@@ -31,13 +31,32 @@ const reacomodar = async (Modelo, id = null, posicion = null) => {
   if (cambios.length) await Modelo.bulkWrite(cambios);
 };
 
-// "  cortes " -> "Cortes" si ya existe así; así no salen dos pestañas que sólo
-// cambian en mayúsculas
-const normalizarCategoria = async (Modelo, texto) => {
-  const limpia = String(texto ?? '').trim().replace(/\s+/g, ' ');
-  if (!limpia) return '';
-  const existentes = await Modelo.distinct('categoria');
-  return existentes.find((c) => c && c.toLowerCase() === limpia.toLowerCase()) || limpia;
+// Un servicio puede estar en varias categorías: "Corte + Barba" sale en
+// "Cortes" y en "Combos". Acepta un arreglo, un JSON o texto separado por
+// comas, y reusa las categorías que ya existen para que no salgan dos
+// pestañas que sólo cambian en mayúsculas ("Cortes" y "cortes").
+const normalizarCategorias = async (Modelo, valor) => {
+  let lista = valor;
+  if (typeof lista === 'string') {
+    const texto = lista.trim();
+    if (texto.startsWith('[')) {
+      try { lista = JSON.parse(texto); } catch { lista = texto.split(','); }
+    } else {
+      lista = texto.split(',');
+    }
+  }
+  if (!Array.isArray(lista)) return [];
+
+  const existentes = await Modelo.distinct('categorias');
+  const salida = [];
+  for (const cruda of lista) {
+    const limpia = String(cruda ?? '').trim().replace(/\s+/g, ' ');
+    if (!limpia) continue;
+    const conocida = existentes.find((c) => c && c.toLowerCase() === limpia.toLowerCase());
+    const final = conocida || limpia;
+    if (!salida.some((c) => c.toLowerCase() === final.toLowerCase())) salida.push(final);
+  }
+  return salida;
 };
 
 // "2026-12-01" -> 1 de diciembre a las 00:00 en Guadalajara (UTC-6 todo el año)
@@ -53,4 +72,4 @@ const aplicarPreciosProgramados = (Modelo) => Modelo.collection.updateMany(
   [{ $set: { precio: '$precioNuevo', precioNuevo: null, precioNuevoDesde: null } }],
 );
 
-module.exports = { leerPosicion, reacomodar, normalizarCategoria, inicioDelDia, aplicarPreciosProgramados };
+module.exports = { leerPosicion, reacomodar, normalizarCategorias, inicioDelDia, aplicarPreciosProgramados };

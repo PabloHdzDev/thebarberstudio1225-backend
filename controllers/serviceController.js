@@ -2,12 +2,12 @@ const mongoose = require('mongoose');
 const Service = require('../models/Service');
 const { paginar } = require('../utils/paginacion');
 const {
-  leerPosicion, reacomodar, normalizarCategoria, inicioDelDia, aplicarPreciosProgramados,
+  leerPosicion, reacomodar, normalizarCategorias, inicioDelDia, aplicarPreciosProgramados,
 } = require('../utils/catalogo');
 
 exports.crearServicio = async (req, res) => {
   try {
-    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior, categoria } = req.body;
+    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior, categorias } = req.body;
 
     // Si Multer procesó una imagen, estará en req.file
     const urlImagen = req.file ? req.file.path : '';
@@ -21,7 +21,7 @@ exports.crearServicio = async (req, res) => {
       activo: activo !== undefined ? (activo === 'true' || activo === true) : true,
       // Se crea al final; abajo se mueve a la posición pedida
       orden: Number.MAX_SAFE_INTEGER,
-      categoria: await normalizarCategoria(Service, categoria),
+      categorias: await normalizarCategorias(Service, categorias),
       esOferta: esOferta === 'true' || esOferta === true,
       precioAnterior: precioAnterior ? parseFloat(precioAnterior) : 0,
       imagen: urlImagen
@@ -65,7 +65,7 @@ exports.obtenerServicios = async (req, res) => {
       limite,
       filtro,
       buscar,
-      campos: ['nombre', 'descripcion', 'categoria'],
+      campos: ['nombre', 'descripcion', 'categorias'],
       orden: { orden: 1, nombre: 1 },
     });
 
@@ -100,7 +100,7 @@ exports.actualizarServicio = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior, categoria } = req.body;
+    const { nombre, descripcion, precio, duracionMinutos, activo, orden, esOferta, precioAnterior, categorias } = req.body;
 
     let updateData = { nombre, descripcion, precio, duracionMinutos };
 
@@ -108,7 +108,7 @@ exports.actualizarServicio = async (req, res) => {
     if (activo !== undefined) updateData.activo = activo === 'true' || activo === true;
     if (esOferta !== undefined) updateData.esOferta = esOferta === 'true' || esOferta === true;
     if (precioAnterior !== undefined) updateData.precioAnterior = parseFloat(precioAnterior);
-    if (categoria !== undefined) updateData.categoria = await normalizarCategoria(Service, categoria);
+    if (categorias !== undefined) updateData.categorias = await normalizarCategorias(Service, categorias);
 
     // Si el barbero subió una foto nueva, actualizamos el link
     if (req.file) {

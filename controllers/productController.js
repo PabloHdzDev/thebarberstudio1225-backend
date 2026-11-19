@@ -1,11 +1,11 @@
 const Product = require('../models/Product');
 const { paginar } = require('../utils/paginacion');
-const { leerPosicion, reacomodar, normalizarCategoria } = require('../utils/catalogo');
+const { leerPosicion, reacomodar, normalizarCategorias } = require('../utils/catalogo');
 
 // Crear Producto
 exports.crearProducto = async (req, res) => {
   try {
-    const { nombre, descripcion, precio, stock, activo, orden, esOferta, precioAnterior, categoria } = req.body;
+    const { nombre, descripcion, precio, stock, activo, orden, esOferta, precioAnterior, categorias } = req.body;
     const urlImagen = req.file ? req.file.path : '';
 
     const nuevoProducto = new Product({
@@ -16,7 +16,7 @@ exports.crearProducto = async (req, res) => {
       activo: activo !== undefined ? (activo === 'true' || activo === true) : true,
       // Se crea al final; abajo se mueve a la posición pedida
       orden: Number.MAX_SAFE_INTEGER,
-      categoria: await normalizarCategoria(Product, categoria),
+      categorias: await normalizarCategorias(Product, categorias),
       esOferta: esOferta === 'true' || esOferta === true,
       precioAnterior: precioAnterior ? parseFloat(precioAnterior) : 0,
       imagen: urlImagen
@@ -54,7 +54,7 @@ exports.obtenerProductos = async (req, res) => {
       limite,
       filtro,
       buscar,
-      campos: ['nombre', 'descripcion', 'categoria'],
+      campos: ['nombre', 'descripcion', 'categorias'],
       orden: { orden: 1, nombre: 1 },
     });
 
@@ -80,14 +80,14 @@ exports.obtenerUnProducto = async (req, res) => {
 exports.actualizarProducto = async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, descripcion, precio, stock, activo, orden, esOferta, precioAnterior, categoria } = req.body;
+    const { nombre, descripcion, precio, stock, activo, orden, esOferta, precioAnterior, categorias } = req.body;
 
     let updateData = { nombre, descripcion, precio, stock };
 
     if (activo !== undefined) updateData.activo = activo === 'true' || activo === true;
     if (esOferta !== undefined) updateData.esOferta = esOferta === 'true' || esOferta === true;
     if (precioAnterior !== undefined) updateData.precioAnterior = parseFloat(precioAnterior);
-    if (categoria !== undefined) updateData.categoria = await normalizarCategoria(Product, categoria);
+    if (categorias !== undefined) updateData.categorias = await normalizarCategorias(Product, categorias);
 
     if (req.file) {
       updateData.imagen = req.file.path;
