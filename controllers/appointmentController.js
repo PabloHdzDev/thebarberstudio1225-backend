@@ -3,6 +3,7 @@ const Service = require('../models/Service');
 const User = require('../models/User');
 const calendar = require('../config/googleCalendar');
 const { paginar, construirRegex } = require('../utils/paginacion');
+const { aplicarPreciosProgramados } = require('../utils/catalogo');
 const socket = require('../socket/socket');
 const { enviarCorreo, correoDelBarbero } = require('../config/mailer');
 
@@ -106,6 +107,8 @@ exports.crearCita = async (req, res) => {
       });
     }
 
+    // Si hoy entra un precio programado, la cita ya se agenda con el precio nuevo
+    await aplicarPreciosProgramados(Service);
     const servicioBD = await Service.findById(servicio);
     if (!servicioBD) return res.status(404).json({ mensaje: 'Servicio no encontrado' });
 

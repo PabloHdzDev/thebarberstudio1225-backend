@@ -1,9 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const serviceController = require('../controllers/serviceController');
-const { protegerRuta } = require('../middleware/authMiddleware');
-
-const { soloBarbero } = require('../middleware/roleMiddleware'); 
+const { protegerRuta, soloBarbero } = require('../middleware/authMiddleware');
 
 const uploadCloud = require('../config/cloudinary');
 
@@ -12,13 +10,19 @@ router.get('/', serviceController.obtenerServicios);
 
 router.get('/:id', serviceController.obtenerUnServicio);
 
-// 2. Crear un servicio (Solo tú)
-router.post('/', protegerRuta, uploadCloud.single('imagen'), serviceController.crearServicio);
+// Lo que sigue cambia el catálogo: sólo el barbero
 
-// 3. ACTUALIZAR UN SERVICIO (👈 Esta es la que te faltaba y causaba el error)
-router.put('/:id', protegerRuta, uploadCloud.single('imagen'), serviceController.actualizarServicio);
+// 2. Crear un servicio
+router.post('/', protegerRuta, soloBarbero, uploadCloud.single('imagen'), serviceController.crearServicio);
 
-// 4. ELIMINAR UN SERVICIO (Por si las dudas)
-router.delete('/:id', protegerRuta, serviceController.eliminarServicio);
+// 3. Cambiar o programar el precio de varios servicios a la vez
+//    (va antes de "/:id" para que "precios" no se tome como un id)
+router.put('/precios', protegerRuta, soloBarbero, serviceController.actualizarPrecios);
+
+// 4. Actualizar un servicio
+router.put('/:id', protegerRuta, soloBarbero, uploadCloud.single('imagen'), serviceController.actualizarServicio);
+
+// 5. Eliminar un servicio
+router.delete('/:id', protegerRuta, soloBarbero, serviceController.eliminarServicio);
 
 module.exports = router;
